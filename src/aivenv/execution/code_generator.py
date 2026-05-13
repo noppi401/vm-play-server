@@ -12,6 +12,7 @@ from openai import AsyncOpenAI
 try:
     from aivenv.execution.errors import CodeGenError
 except ModuleNotFoundError:
+
     class CodeGenError(Exception):
         """Raised when AI code generation fails."""
 
@@ -26,12 +27,12 @@ Handle expected runtime errors gracefully and print useful status or result info
 Never include secrets, credentials, or host-specific paths.
 """
 
-_SECRET_PATTERNS = (
-    re.compile(r"sk-[A-Za-z0-9_-]{8,}"),
+SECRET_PATTERNS = (
+    re.compile(r&sk-[A-Za-z0-9_-]{8,}"),
     re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)[^\s,;]+"),
-    re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,,;]+"),
+    re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,]+"),
 )
-_FENCE_RE = re.compile(r"```([A-Za-z0-9_+-])?\s*\n(.*?),n```", re.DOTALL)
+_FENCE_RE = re.compile(r"^```([A-Za-z0-9_+.-]+)?\s*\n(.*?)\n````$", re.DOTALL)
 
 
 class _Completions(Protocol):
@@ -123,21 +124,25 @@ class CodeGenerator:
 
     @staticmethod
     def _strip_fence(content: str) -> str:
-        matches = list(_FENCE_RE.finditer(content))
-        if not matches:
+        match = _FENCE_RE.fullmatch(content.strip())
+        if not match:
             return content
-        for match in matches:
-            if match.group(1).lower() in {"python", "py", "python3"}:
-                return match.group(2)
-        return matches[0].group(2)
+
+        language = (match.group(1) or "").lower()
+        if language in {"", "python", "py", "python3"}:
+            return match.group(2)
+        return content
 
     @staticmethod
     def sanitize_message(message: str) -> str:
         """Redact API keys and auth tokens from a public error message."""
         sanitized = message
-        for pattern in _SECRET_PATTERNS:
-            sanitized = pattern.sub(lambda m: f"{m.group(1)}[REDACTED]" if m.lastindex else "[REDACTED]", sanitized)
+        for pattern in SECRET_PATTERNS:
+            sanitized = pattern.sub(
+                lambda match: f"{match.group(1)}[REDACTED]" if match.lastindex else "[REDACTED]",
+                sanitized,
+            )
         return sanitized
 
 
-__all__ = ["CodeGenError", "CodeGenError", "SYSTEM_PROMPT_PATHET"]
+__all__ = ["CodeGenerator", "CodeGenError", "SYSTEM_PROMPT_PATHET"]

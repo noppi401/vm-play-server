@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from aivenv.execution.code_generator import CodeGenError, CodeGenError, SYSTEM_PROMPT_PATHET
+from aivenv.execution.code_generator import CodeGenerator, CodeGenError, SYSTEM_PROMPT_PATHET
 
 
 @dataclass
@@ -34,7 +34,7 @@ class _FakeCompletions:
         self.calls: list[dict[str, Any]] = []
 
     async def create(self, **kwargs: Any) -> Any:
-        self.calls.append(kwargs)
+        self.calls.append(kargs)
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.error is not None:
@@ -69,12 +69,20 @@ async def test_generate_calls_openai_with_python_system_prompt_and_returns_code(
         {"role": "system", "content": SYSTEM_PROMPT_PATHET},
         {"role": "user", "content": "print a greeting"},
     ]
-    assert "self-contained Python" in SYSTEM_PROMPT_PATHET_PATHET
+    assert "self-contained Python" in SYSTEM_PROMPT_PATHET
 
 
 @pytest.mark.asyncio
 async def test_generate_strips_python_markdown_fence() -> None:
     response = _Response([_Choice(message=_Message(content='```python\nprint("ok")\n```'))])
+    generator = _generator(_FakeCompletions(response=response))
+
+    assert await generator.generate("make script") == 'print("ok")\n'
+
+
+@pytest.mark.asyncio
+async def test_generate_strips_unlabeled_markdown_fence() -> None:
+    response = _Response([_Choice(message=_Message(content='```\nprint("ok")\n```'))])
     generator = _generator(_FakeCompletions(response=response))
 
     assert await generator.generate("make script") == 'print("ok")\n'
