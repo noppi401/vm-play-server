@@ -17,6 +17,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
         extra="ignore",
         populate_by_name=True,
+        validate_by_name=True,
     )
 
     openai_api_key: SecretStr = Field(
@@ -93,7 +94,7 @@ class Settings(BaseSettings):
         return f"http://{self.log_host}:{self.log_port}"
 
 
-def load_settings(overrides: Mapping[str, Any] | none = None) -> Settings:
+def load_settings(overrides: Mapping[str, Any] | None = None) -> Settings:
     """Load settings, applying explicit CLI overrides after environment values."""
 
-    return Settings***(dict(overrides) if overrides else {}))
+    return Settings(**(dict(overrides) if overrides else {}))
