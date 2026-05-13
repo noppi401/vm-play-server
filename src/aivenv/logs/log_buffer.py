@@ -4,156 +4,144 @@ import asyncio
 import threading
 from collections import deque
 from collections.abc import AsyncIterator
-from contextlib import suppress
+from concurrent.futures import Future
 from dataclasses import dataclass
-from typing import Deque, Final
+from typing import ClassVar
 
 
-_DONE_SENTINEL: Final[object] = object()
-
-
-@dataclass(frozen=True, slots=True)
-class LogEntry:
-    """A single retained log entry."""
-
-    sequence: int
-    text: str
+_xDONE: object = object()
 
 
 @dataclass(frozen=True, slots=True)
 class _Subscriber:
+    """Internal record tracking a stream subscriber's queue and event loop."""
+
+    queue: asyncio.Queue[str | object]
     loop: asyncio.AbstractEventLoop
-    queue: asyncio.Queue[LogEntry | object]
 
 
 class LogBuffer:
-    """Thread-safe, asyncio-compatible in-memory log buffer."""
+    """Thread-safe, asyncio-compatible in-memory log buffer.
 
-    def __init__(self, max_lines: int = 10_000, subscriber_queue_size: int = 1000) -> None:
-        if max_lines <= 0:
-            raise ValueError("max_lines must be greater than zero")
-        if subscriber_queue_size <= 0:
-            raise ValueError("subscriber_queue_size must be greater than zero")
+    The buffer keeps a bounded deque of raw log chunks for snapshot
+    and late-subscriber catch-up, and fans new chunks out to each active
+    asyncio stream using a per-subscriber queue. Subscriber queues are
+    unbounded by default so slow clients do not block log collection.
+    """
 
-        self._entries: Deque[LogEntry] = deque(maxlen=max_lines)
-        self._subscribers: set[_Subscriber] = set()
-        self._lock = threading.RLock()
-        self._is_done = False
-        self._next_sequence = 0
-        self._subscriber_queue_size = subscriber_queue_size
+    _DEFAULT_MAX_CHUNKS: ClassVar[int] = 10_000
 
-    @property
-    def is_done(self) -> bool:
+    def __init__(self, maxChunks: int = _DEFAULT_MAX_CHUNKS, *, subscriberQueueSize: int = 0) -> None:
+        """Initialize a log buffer."""
+        if maxChunks <= 0:
+            raise ValueError("maxChunks must be greater than 0")
+        if subscriberQueueSize < 0:
+            raise ValueError("subscriberQueueSize must be greater than or equal to 0")
+
+        self._chunks: deque[str] = deque(maxlen=maxChunks)
+        self._subscribers: dict[int, _Subscriber] = {}
+        self._subscriberQueueSize: int = subscriberQueueSize
+        self._lock: threading.RLock = threading.RLock()
+        self._nextSubscriberId: int = 1
+        self._done: bool = False
+
+    async def write(self, chunk: str) -> None:
+        """Append a raw log chunk and broadcast it to active streams."""
+        if not isinstance(chunk, str):
+            raise TypeError("chunk must be a str")
+        if chunk == "":
+            return
+
         with self._lock:
-            return self._is_done
-
-    async def write(self, text: str) -> None:
-        if not isinstance(text, str):
-            raise TypeError("text must be a string")
-
-        with self._lock:
-            if self._is_done:
+            if self._done:
                 raise RuntimeError("cannot write to a completed LogBuffer")
-            entry = LogEntry(sequence=self._next_sequence, text=text)
-            self._next_sequence += 1
-            self._entries.append(entry)
-            subscribers = tuple(self._subscribers)
+            self._chunks.append(chunk)
+            subscribers = tuple(self._subscribers.items())
 
-        await self._broadcast(subscribers, entry)
+        await self._broadcast(subscribers, chunk)
 
-    async def stream(self, from_sequence: int | None = None) -> AsyncIterator[str]:
-        if from_sequence is not None and from_sequence < 0:
-            raise ValueError("from_sequence must be non-negative")
-
+    async def stream(self) -> AsyncIterator[str]:
+        """Stream retained catch-up logs followed by future logs."""
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[LogEntry | object] = asyncio.Queue(maxsize=self._subscriber_queue_size)
-        subscriber = _Subscriber(loop=loop, queue=queue)
+        queue: asyncio.Queue[str | object] = asyncio.Queue(maxsize=self._subscriberQueueSize)
 
         with self._lock:
-            start = 0 if from_sequence is None else from_sequence
-            catch_up = tuple(entry for entry in self._entries if entry.sequence >= start)
-            already_done = self._is_done
-            if not already_done:
-                self._subscribers.add(subscriber)
+            catchUp = tuple(self._chunks)
+            alreadyDone = self._done
+            subscriberId = self._nextSubscriberId
+            self._nextSubscriberId += 1
+            if not alreadyDone:
+                self._subscribers[subscriberId] = _Subscriber(queue=queue, loop=loop)
 
         try:
-            for entry in catch_up:
-                yield entry.text
-            if already_done:
+            for chunk in catchUp:
+                yield chunk
+
+            if alreadyDone:
                 return
 
             while True:
                 item = await queue.get()
-                if item is _DONE_SENTINEL:
+                if item is _xDONE:
                     return
-                if isinstance(item, LogEntry):
-                    yield item.text
+                if not isinstance(item, str):
+                    continue
+                yield item
         finally:
             with self._lock:
-                self._subscribers.discard(subscriber)
+                self._subscribers.pop(subscriberId, None)
 
     async def done(self) -> None:
+        """Mark the buffer complete and close all live streams."""
         with self._lock:
-            if self._is_done:
+            if self._done:
                 return
-            self._is_done = True
-            subscribers = tuple(self._subscribers)
+            self._done = True
+            subscribers = tuple(self._subscribers.items())
             self._subscribers.clear()
 
-        await self._broadcast(subscribers, _DONE_SENTINEL)
+        await self._broadcast(subscribers, _xDONE)
 
     async def clear(self) -> None:
+        """Clear the retained buffer and close existing streams."""
         with self._lock:
-            subscribers = tuple(self._subscribers)
+            subscribers = tuple(self._subscribers.items())
             self._subscribers.clear()
-            self._entries.clear()
-            self._is_done = False
-            self._next_sequence = 0
+            self._chunks.clear()
+            self._done = False
 
-        await self._broadcast(subscribers, _DONE_SENTINEL)
+        await self._broadcast(subscribers, _xDONE)
 
-    async def snapshot(self) -> str:
+    def snapshot(self) -> str:
+        """Return the raw retained log text for the log endpoint."""
         with self._lock:
-            return "".join(entry.text for entry in self._entries)
+            return "".join(self._chunks)
 
-    async def entries(self) -> tuple[LogEntry, ...]:
+    def is_done(self) -> bool:
+        """Return whether the buffer has been marked complete."""
         with self._lock:
-            return tuple(self._entries)
+            return self._done
 
-    async def _broadcast(self, subscribers: tuple[_Subscriber, ...], item: LogEntry | object) -> None:
+    async def _broadcast(self, subscribers: tuple[tuple[int, _Subscriber], ...], item: str | object) -> None:
         if not subscribers:
             return
-        running_loop = asyncio.get_running_loop()
-        futures: list[asyncio.Future[None]] = []
 
-        for subscriber in subscribers:
+        runningLoop = asyncio.get_running_loop()
+        awaitables: list[Future[None] | asyncio.Future[None]] = []
+
+        for subscriberId, subscriber in subscribers:
             if subscriber.loop.is_closed():
                 with self._lock:
-                    self._subscribers.discard(subscriber)
+                    self._subscribers.pop(subscriberId, None)
                 continue
 
-            if subscriber.loop is running_loop:
-                self._put_nowait(subscriber.queue, item)
-                continue
+            if subscriber.loop is runningLoop:
+                awaitables.append(asyncio.create_task(subscriber.queue.put(item)))
+            else:
+                awaitables.append(asyncio.run_coroutine_threadsafe(subscriber.queue.put(item), subscriber.loop))
 
-            future = asyncio.run_coroutine_threadsafe(
-                self._put_from_foreign_loop(subscriber.queue, item),
-                subscriber.loop,
-            )
-            futures.append(asyncio.wrap_future(future))
-
-        if futures:
-            await asyncio.gather(*futures)
-
-    @staticmethod
-    async def _put_from_foreign_loop(queue: asyncio.Queue[LogEntry | object], item: LogEntry | object) -> None:
-        LogBuffer._put_nowait(queue, item)
-
-    @staticmethod
-    def _put_nowait(queue: asyncio.Queue[LogEntry | object], item: LogEntry | object) -> None:
-        try:
-            queue.put_nowait(item)
-        except asyncio.QueueFull:
-            with suppress(asyncio.QueueEmpty):
-                queue.get_nowait()
-            queue.put_nowait(item)
+        for awaitable in awaitables:
+            if isinstance(awaitable, asyncio.Future):
+                await awaitable
+            else:
+                await asyncio.wrap_future(awaitable)
