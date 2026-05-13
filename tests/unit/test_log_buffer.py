@@ -17,13 +17,13 @@ async def acollect(stream: AsyncIterator[str], limit: int) -> list[str]:
 
 @pytest.mark.asyncio
 async def test_snapshot_and_bounded_retention() -> None:
-    buffer = LogBuffer(max_lines=2)
+    buffer = LogBuffer(maxChunks=2)
 
     await buffer.write("one\n")
     await buffer.write("two\n")
     await buffer.write("three\n")
 
-    assert await buffer.snapshot() == "two\nthree\n"
+    assert buffer.snapshot() == "two\nthree\n"
 
 
 @pytest.mark.asyncio
@@ -70,5 +70,5 @@ async def test_clear_resets_buffer_and_closes_stream() -> None:
     await buffer.clear()
     await buffer.write("new\n")
 
-    assert await buffer.snapshot() == "new\n"
+    assert buffer.snapshot() == "new\n"
     assert await asyncio.wait_for(task, 1) == ["old\n"]
