@@ -4,6 +4,7 @@ import asyncio
 import threading
 from collections import deque
 from collections.abc import AsyncIterator
+from concurrent.futures import Future
 from dataclasses import dataclass
 from typing import ClassVar
 
@@ -61,28 +62,96 @@ class LogBuffer:
         if chunk == "":
             return
 
-�]�[�����΂�Y��[���ۙN���Z\�H�[�[YQ\��܊����Y��\�\�[�XYHX\��YۙH�B��[����[��˘\[�
-�[��B��X��ܚX�\�Έ\����X��ܚX�\�HH\�
-�[����X��ܚX�\�˝�[Y\�
-JB���܈�X��ܚX�\�[��X��ܚX�\�΂��[����[���ۗ��XY�Y�J�X��ܚX�\��[��B��\�[��Y�ۙJ�[�HO��ۙN�����X\��H�Y��\�\���\]H[����HX�]�H��X[\ˈ�����]�[�����΂�Y��[���ۙN���]\�����[���ۙHH�YB��X��ܚX�\�Έ\����X��ܚX�\�HH\�
-�[����X��ܚX�\�˝�[Y\�
-JB���܈�X��ܚX�\�[��X��ܚX�\�΂��[����[���ۗ��XY�Y�J�X��ܚX�\��ӑJB��\�[��Y��X\��[�HO��ۙN������X\��]Z[�Y����\�]��\][ۋ[����HX�]�H��X[\ˈ�����]�[�����΂��X��ܚX�\�Έ\����X��ܚX�\�HH\�
-�[����X��ܚX�\�˝�[Y\�
-JB��[����X��ܚX�\�˘�X\�
-B��[����[��˘�X\�
-B��[���ۙHH�[�B���܈�X��ܚX�\�[��X��ܚX�\�΂��[����[���ۗ��XY�Y�J�X��ܚX�\��ӑJB��Y�ۘ\��
-�[�HO���������]\��H�]��ۘ�][�]Y���܈H�]���[��[�������]�[�����΂��]\�������[��[����[���B��Y�\�ۙJ�[�HO����������]\���]\�H�Y��\�\��Y[�X\��Y��\]K������]�[�����΂��]\���[���ۙB��\�[��Y���X[J�[�HO�\�[��]\�]ܖ���N�����ZY[�]Z[�Y�[����\��[�]�H�[���[�[H�Y��\�\�ۙK��������\�[��[ːX���X�]�[���H\�[��[˙�]ܝ[��[�����
+        with self._lock:
+            if self._done:
+                raise RuntimeError("cannot write to a completed LogBuffer")
+            self._chunks.append(chunk)
+            subscribers = tuple(self._subscribers.items())
 
-B�]Y]YN�\�[��[˔]Y]YV���ؚ�X�HH\�[��[˔]Y]YJX^�^�O\�[����X��ܚX�\�]Y]YT�^�JB���]�[�����΂��X��ܚX�\�Y�[�H�[��ۙ^�X��ܚX�\�Y��[��ۙ^�X��ܚX�\�Y
-�HB��]�\�\����HH\�
-�[����[���B�[�XYQۙN����H�[���ۙB�Y���[�XYQۙN���[����X��ܚX�\����X��ܚX�\�YHH��X��ܚX�\�]Y]YO\]Y]YK��[��
-B���N���܈�[��[��]�\��ZY[�[��Y�[�XYQۙN���]\�����[H�YN��][N���ؚ�X�H]�Z]]Y]YK��]
+        await self._broadcast(subscribers, chunk)
 
-B�Y�][H\��ӑN���]\���Y���\�[��[��J][K��N���۝[�YB�ZY[][B��[�[N���]�[�����΂��[����X��ܚX�\�˜�
-�X��ܚX�\�Y�ۙJB��Y���[���ۗ��XY�Y�J�[��X��ܚX�\����X��ܚX�\�][N���ؚ�X�
-HO��ۙN���X��ܚX�\������[���ۗ��XY�Y�J�[���]��[�K�X��ܚX�\��]Y]YK][JB���]X�Y]��Y��]��[�J]Y]YN�\�[��[˔]Y]YV���ؚ�X�K][N���ؚ�X�
-HO��ۙN���N��]Y]YK�]ۛ��Z]
-][JB�^�\\�[��[˔]Y]YQ�[���N��]Y]YK��]ۛ��Z]
+    async def stream(self) -> AsyncIterator[str]:
+        """Stream retained catch-up logs followed by future logs."""
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[str | object] = asyncio.Queue(maxsize=self._subscriberQueueSize)
 
-B�^�\\�[��[˔]Y]YQ[\N��\�]Y]YK�]ۛ��Z]
-][JB
+        with self._lock:
+            catchUp = tuple(self._chunks)
+            alreadyDone = self._done
+            subscriberId = self._nextSubscriberId
+            self._nextSubscriberId += 1
+            if not alreadyDone:
+                self._subscribers[subscriberId] = _Subscriber(queue=queue, loop=loop)
+
+        try:
+            for chunk in catchUp:
+                yield chunk
+
+            if alreadyDone:
+                return
+
+            while True:
+                item = await queue.get()
+                if item is _DONE:
+                    return
+                if not isinstance(item, str):
+                    continue
+                yield item
+        finally:
+            with self._lock:
+                self._subscribers.pop(subscriberId, None)
+
+    async def done(self) -> None:
+        """Mark the buffer complete and close all live streams."""
+        with self._lock:
+            if self._done:
+                return
+            self._done = True
+            subscribers = tuple(self._subscribers.items())
+            self._subscribers.clear()
+
+        await self._broadcast(subscribers, _DONE)
+
+    async def clear(self) -> None:
+        """Clear the retained buffer and close existing streams."""
+        with self._lock:
+            subscribers = tuple(self._subscribers.items())
+            self._subscribers.clear()
+            self._chunks.clear()
+            self._done = False
+
+        await self._broadcast(subscribers, _DONE)
+
+    def snapshot(self) -> str:
+        """Return the raw retained log text for the log endpoint."""
+        with self._lock:
+            return "".join(self._chunks)
+
+    def is_done(self) -> bool:
+        """Return whether the buffer has been marked complete."""
+        with self._lock:
+            return self._done
+
+    async def _broadcast(self, subscribers: tupletuple[int, _Subscriber], ...], item: str | object) -> None:
+        if not subscribers:
+            return
+
+        runningLoop = asyncio.get_running_loop()
+        awaitables: list[Future[None] | asyncio.Future[None]] = []
+
+        for subscriberId, subscriber in subscribers:
+            if subscriber.loop.is_closed():
+                with self._lock:
+                    self._subscribers.pop(subscriberId, None)
+                continue
+
+            if subscriber.loop is runningLoop:
+                awaitables.append(asyncio.create_task(subscriber.queue.put(item)))
+            else:
+                awaitables.append(asyncio.run_coroutine_threadsafe(subscriber.queue.put(item), subscriber.loop))
+
+        for awaitable in awaitables:
+            if isinstance(awaitable, asyncio.Future):
+                await awaitable
+            else:
+                await asyncio.wrap_future(awaitable)
