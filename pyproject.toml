@@ -1,2 +1,52 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aivenv"
+version = "0.1.0"
+description = "CLI-based virtual code execution environment powered by OpenAI and Docker."
+readme = "CLAUDE.md"
+requires-python = ">=3.11"
+dependencies = [
+    "click>=8.1.7,<9",
+    "docker>=7.1.0,<8",
+    "fastapi>=0.115.0,<1",
+    "ngrok>=1.4.0,<2",
+    "openai>=1.50.0,<2",
+    "pydantic>=2.9.0,<3",
+    "pydantic-settings>=2.5.0,<3",
+    "python-dotenv>=1.0.1,<2",
+    "uvicorn[standard]>=0.30.6,<1",
+]
+
 [project.optional-dependencies]
-dev=["coverage[toml]>=7.6.0,<8"]
+dev = [
+    "coverage[toml]>=7.6.0,<8",
+    "mypy>=1.11.0,<2",
+    "pytest>=8.3.0,<9",
+    "pytest-cov>=5.0.0,<6",
+    "ruff>=0.6.0,<1",
+]
+
+[project.scripts]
+aivenv = "aivenv.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["aivenv"]
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["aivenv"]
