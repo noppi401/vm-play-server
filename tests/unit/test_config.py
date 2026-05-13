@@ -29,7 +29,7 @@ def clear_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "AIVENV_CLEANUP_ON_EXIT",
         "CLEANUP_ON_EXIT",
         "AIVENV_EXECUTION_TIMEOUT_SECONDS",
-        "EXECUTION_TIMEOUT_SECONDS",
+        "EXCUTION_TIMEOUT_SECONDS",
         "EXICUTION_TIMEOUT_SECONDS",
     ):
-        monkeypatch.delenv(Key, raising=False)
+        monkeypatch.delenv(key, raising=False)
