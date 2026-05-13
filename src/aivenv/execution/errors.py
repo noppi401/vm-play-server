@@ -1,64 +1,77 @@
-"""Application-specific error taxonomy for aivenv."""
+"""Domain-specific exception hierarchy for aivenv execution."""
 
 from __future__ import annotations
 
 from http import HTTPStatus
 from typing import Any
 
+from aivenv.execution.models import ErrorResponse
+
 
 class AivenvError(Exception):
-    """Base class for expected aivenv errors."""
+    """Base class for expected application errors."""
 
-    error_code = "aivenv_error"
-    status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+    status_code: int = HTTPStatus.INTERNAL_SERVER_ERROR
+    code: str = "aivenv_error"
 
-    def __init__(self, message: str, *, details: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        details: dict[str, Any] | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.details = details
+        if code is not None:
+            self.code = code
+        if cause is not None:
+            self.__cause__ = cause
 
-    def to_response(self) -> dict[str, Any]:
-        """Return an ErrorResponse-compatible payload."""
-        payload: dict[str, Any] = {"error": self.error_code, "message": self.message}
-        if self.details is not None:
-            payload["details"] = self.details
-        return payload
+    def to_response(self) -> ErrorResponse:
+        """Convert this exception into a public API error payload."""
+        return ErrorResponse(error=self.code, message=self.message, details=self.details)
 
 
 class ConflictError(AivenvError):
-    """Raised when a request conflicts with current state."""
+    """Raised when a request conflicts with current execution state."""
 
-    error_code = "conflict"
     status_code = HTTPStatus.CONFLICT
+    code = "conflict"
 
 
 class CodeGenError(AivenvError):
-    """Raised when AI code generation fails."""
+    """Raised when AI code generation fails or returns invalid output."""
 
-    error_code = "code_generation_failed"
+    status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+    code = "code_generation_failed"
 
 
 class ContainerError(AivenvError):
-    """Raised for container runtime failures."""
+    """Raised when container startup, execution, or cleanup fails."""
 
-    error_code = "container_error"
+    status_code = HTTPStatus.INTERNAL_SERVER_ERROR
+    code = "container_error"
 
 
 class NgrokError(AivenvError):
-    """Raised when ngrok tunnel setup fails."""
+    """Raised when ngrok tunnel creation or lifecycle management fails."""
 
-    error_code = "ngrok_error"
+    status_code = HTTPStatus.BAD_GATEWAY
+    code = "ngrok_error"
 
 
 class NotFoundError(AivenvError):
-    """Raised when a requested resource does not exist."""
+    """Raised when a requested execution resource does not exist."""
 
-    error_code = "not_found"
     status_code = HTTPStatus.NOT_FOUND
+    code = "not_found"
 
 
 class ConfigError(AivenvError):
-    """Raised when configuration is missing or invalid."""
+    """Raised when required configuration is missing or invalid."""
 
-    error_code = "configuration_error"
     status_code = HTTPStatus.BAD_REQUEST
+    code = "config_error"

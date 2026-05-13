@@ -1,9 +1,8 @@
-"""Tests for execution models and errors."""
+"""Unit tests for execution models and error taxonomy."""
 
 from __future__ import annotations
 
 from http import HTTPStatus
-from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
@@ -27,65 +26,75 @@ from aivenv.execution.models import (
 )
 
 
-def test_run_request_strips_and_requires_instruction() -> None:
-    request = RunRequest(instruction="  build a fastapi app  ")
+def test_run_request_strips_and_validates_instruction() -> None:
+    request = RunRequest(instruction="  build a dashboard  ")
 
-    assert request.instruction == "build a fastapi app"
+    assert request.instruction == "build a dashboard"
 
+
+
+@pytest.mark.parametrize("instruction", ["", "   ", "\t\n"])
+def test_run_request_rejects_empty_instruction(instruction: str) -> None:
     with pytest.raises(ValidationError):
-        RunRequest(instruction="   ")
+        RunRequest(instruction=instruction)
 
 
-def test_execution_session_defaults_and_status_update() -> None:
-    session = ExecutionSession(instruction="print hello")
+def test_execution_session_defaults_and_terminal_status_update() -> None:
+    session = ExecutionSession(execution_id="exec-1", instruction="print hello")
 
-    assert isinstance(session.execution_id, UUID)
     assert session.status is ExecutionStatus.PENDING
-    assert session.error_message is None
+    assert session.completed_at is None
 
-    original_updated_at = session.updated_at
     session.mark_status(ExecutionStatus.FAILED, error_message="container failed")
 
     assert session.status is ExecutionStatus.FAILED
     assert session.error_message == "container failed"
-    assert session.updated_at >= original_updated_at
+    assert session.completed_at == session.updated_at
 
 
-def test_response_models_validate() -> None:
-    execution_id = "1f941145-f4a4-4f07-9a40-7ce4cd321783"
+def test_response_models_serialize_expected_fields() -> None:
+    run_response = RunResponse(execution_id="exec-1", result_url="https://example.ngrok.io")
+    stop_response = StopResponse(
+        execution_id="exec-1",
+        status=ExecutionStatus.STOPPED,
+        message="execution stopped",
+    )
+    error_response = ErrorResponse(error="config_error", message="missing token")
 
-    run = RunResponse(execution_id=execution_id, result_url="https://example.ngrok.io")
-    stop = StopResponse(execution_id=execution_id)
-    error = ErrorResponse(error="conflict", message="already active")
-
-    assert run.execution_id == UUID(execution_id)
-    assert str(run.result_url) == "https://example.ngrok.io/"
-    assert stop.status is ExecutionStatus.STOPPED
-    assert error.details is None
-
-
-def test_error_taxonomy_responses() -> None:
-    cases = [
-        (ConflictError("active"), "conflict", HTTPStatus.CONFLICT),
-        (CodeGenError("bad output"), "code_generation_failed", HTTPStatus.INTERNAL_SERVER_ERROR),
-        (ContainerError("docker failed"), "container_error", HTTPStatus.INTERNAL_SERVER_ERROR),
-        (NgrokError("no url"), "ngrok_error", HTTPStatus.INTERNAL_SERVER_ERROR),
-        (NotFoundError("missing"), "not_found", HTTPStatus.NOT_FOUND),
-        (ConfigError("missing token"), "configuration_error", HTTPStatus.BAD_REQUEST),
-    ]
-
-    for error, code, status in cases:
-        assert isinstance(error, AivenvError)
-        assert error.error_code == code
-        assert error.status_code == status
-        assert error.to_response() == {"error": code, "message": error.message}
-
-
-def test_error_details_are_optional() -> None:
-    error = ContainerError("failed", details={"container_id": "abc123"})
-
-    assert error.to_response() == {
-        "error": "container_error",
-        "message": "failed",
-        "details": {"container_id": "abc123"},
+    assert run_response.model_dump(mode="json") == {
+        "execution_id": "exec-1",
+        "result_url": "https://example.ngrok.io",
+        "status": "running",
     }
+    assert stop_response.model_dump(mode="json")["status"] == "stopped"
+    assert error_response.model_dump(mode="json")["details"] is None
+
+
+@pytest.mark.parametrize(
+    ("error_type", "status_code", "code"),
+    [
+        (AivenvError, HTTPStatus.INTERNAL_SERVER_ERROR, "aivenv_error"),
+        (ConflictError, HTTPStatus.CONFLICT, "conflict"),
+        (CodeGenError, HTTPStatus.INTERNAL_SERVER_ERROR, "code_generation_failed"),
+        (ContainerError, HTTPStatus.INTERNAL_SERVER_ERROR,"container_error"),
+        (NgrokError, HTTPStatus.BAD_GATEWAY, "ngrok_error"),
+        (NotFoundError, HTTPStatus.NOT_FOUND, "not_found"),
+        (ConfigError, HTTPStatus.BAD_REQUEST, "config_error"),
+    ],
+)
+def test_error_hierarchy_maps_to_error_response(
+    error_type: type[AivenvError],
+    status_code: HTTPStatus,
+    code: str,
+) 
+--> None:
+    error = error_type("something failed", details={"field": "value"})
+
+    assert isinstance(error, AivenvError)
+    assert error.status_code == status_code
+    assert error.code == code
+    assert error.to_response() == ErrorResponse(
+        error=code,
+        message="something failed",
+        details={"field": "value"},
+    )
