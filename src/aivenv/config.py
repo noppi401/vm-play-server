@@ -9,33 +9,91 @@ from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-�\���][����\�T�][���N������[�[YH�][����YY���H[��\�ۛY[��\�XX�\�[��Hݙ\��Y\ˈ�����[�[��ۙ�Y�H�][����ۙ�Y�X�
-�[��ٚ[OH��[����[��ٚ[W�[���[��H�]�N��^�OH�YۛܙH���\�W��[��]]�OQ�[�K��[]W؞Wۘ[YOU�YK�
-B���[�ZW�\W��^N��Xܙ]��H�Y[
-�����\�ܚ\[ۏH��[�RHTH�^K����[Y][ۗ�[X\�P[X\���X�\���S�RW�TW��VH��RU�S����S�RW�TW��VH���[�ZW�\W��^H�K�
-B��ܛ���]]��[���Xܙ]��H�Y[
-�����\�ܚ\[ۏH��ܛ��]][�X�][ۈ��[�����[Y][ۗ�[X\�P[X\���X�\���ԓ���UU��S���RU�S��ӑԓ���UU��S����ܛ���]]��[��K�
-B������H�Y[
-�L�ˌ��H��[Y][ۗ�[X\�P[X\���X�\��RU�S����������JB�ܝ�[�H�Y[
-�OLKOM�ML�K�[Y][ۗ�[X\�P[X\���X�\��RU�S���ԕ��ԕ��ܝ�JB���������H�Y[
-�L�ˌ��H��[Y][ۗ�[X\�P[X\���X�\��RU�S����������������JB����ܝ�[�H�Y[
-K�OLKOM�ML�K�[Y][ۗ�[X\�P[X\���X�\��RU�S������ԕ�����ԕ�����ܝ�JB��[�ZW�[�[���H�Y[
-��Mȋ�[Y][ۗ�[X\�P[X\���X�\��RU�S����S�RW�S�S���S�RW�S�S���[�ZW�[�[�JB��۝Z[�\��[XY�N���H�Y[
-�]ێ�ˌLK\�[H��[Y][ۗ�[X\�P[X\���X�\��RU�S����ӕRS�T��SPQ�H���ӕRS�T��SPQ�H���۝Z[�\��[XY�H�JB��W�[Z]���]H�Y[
-K��L�[Y][ۗ�[X\�P[X\���X�\��RU�S����W�SRU���W�SRU���W�[Z]�JB�Y[[ܞW�[Z]���H�Y[
-�LL�H��[Y][ۗ�[X\�P[X\���X�\��RU�S���QSSԖW�SRU��QSSԖW�SRU��Y[[ܞW�[Z]�JB��X[�\�ۗ�^]����H�Y[
-�YK�[Y][ۗ�[X\�P[X\���X�\��RU�S����PS�T�ӗ�VU���PS�T�ӗ�VU���X[�\�ۗ�^]�JB�^X�][ۗ�[Y[�]��X�ۙΈ[�H�Y[
-��L�[Y][ۗ�[X\�P[X\���X�\��RU�S���VP�USӗ�SQS�U��P�ӑȋ�VP�USӗ�SQS�U��P�ӑȋ�^X�][ۗ�[Y[�]��X�ۙȊJB���Y[ݘ[Y]܊�������������[�ZW�[�[���۝Z[�\��[XY�H��Y[[ܞW�[Z]�B��\��Y]��Y�ۛۗ�[\W���[�����[YN���HO������ܛX[^�YH�[YK���\
 
-B�Y����ܛX[^�Y���Z\�H�[YQ\��܊��[YH]\����H[\H�B��]\���ܛX[^�Y���Y[ݘ[Y]܊�Y[[ܞW�[Z]�B��\��Y]��Y�ݘ[Y]W�Y[[ܞW�[Z]
-���[YN���HO������ܛX[^�YH�[YK���\
+class Settings(BaseSettings):
+    """Runtime settings loaded from environment variables and CLI overrides."""
 
-K���\�
-B�Y��ܛX[^�Y�LN�H��[�Ș���ȋ�H��ȟN���Z\�H�[YQ\��܊�Y[[ܞW�[Z]]\�\�HH���\�X��\]X�H[�]�X�\�LL�H܈YȊB�[[�[�H�ܛX[^�Y΋LWB�Y���[[�[��\�Y�]
+    model_config = SettingsConfigDict(
+        env_prefix="AIVENV_",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
-H܈[�
-[[�[�
-HH���Z\�H�[YQ\��܊�Y[[ܞW�[Z]]\��۝Z[�H��]]�H[�Y�\�[[�[��B��]\���ܛX[^�Y����\�B�Y��[�ZW�\W��^Wݘ[YJ�[�HO���������]\��H�]��[�RHTH�^H�܈��\�K������]\���[���[�ZW�\W��^K��]��Xܙ]ݘ[YJ
-B����\�B�Y��ܛ���]]��[�ݘ[YJ�[�HO���������]\��H�]��ܛ����[��܈��\�K������]\���[���ܛ���]]��[���]��Xܙ]ݘ[YJ
-B����\�B�Y�����\��\��\�
-�[�HO���������]\��H��[T�]�ܛ����[^��HX�X�K������]\���������[�������N���[�����ܝH����Y��Y��][����W�ݙ\��Y\ΈX\[�����[�WH����R����R���6WGF��w3��""$��B6WGF��w2g&��V�f�&���V�Bf&�&�W2�B�����V��4Ē�fW'&�FW2�"" ��b��B6ƕ��fW'&�FW3��&WGW&�6WGF��w2���f��FW&VE��fW'&�FW2���W��f�VRf�"�W��f�VR��6ƕ��fW'&�FW2�FV�2���bf�VR�2��B���WТ&WGW&�6WGF��w2���f��FW&VE��fW'&�FW2�
+    openai_api_key: SecretStr = Field(
+        validation_alias=AliasChoices("AIVENV_OPENAI_API_KEY", "OPENAI_API_KEY")
+    )
+    ngrok_authtoken: SecretStr = Field(
+        validation_alias=AliasChoices("AIVENV_NGROK_AUTHTOKEN", "NGROK_AUTHTOKEN")
+    )
+    host: str = Field(default="127.0.0.1", validation_alias=AliasChoices("AIVENV_HOST"))
+    port: int = Field(default=8080, validation_alias=AliasChoices("AIVENV_PORT", "PORT"))
+    log_host: str = Field(default="127.0.0.1", validation_alias=AliasChoices("AIVENV_LOG_HOST"))
+    log_port: int = Field(default=8081, validation_alias=AliasChoices("AIVENV_LOG_PORT", "LOG_PORT"))
+    openai_model: str = Field(
+        default="gpt-4o",
+        validation_alias=AliasChoices("AIVENV_OPENAI_MODEL", "OPENAI_MODEL"),
+    )
+    container_image: str = Field(
+        default="python:3.11-slim",
+        validation_alias=AliasChoices("AIVENV_CONTAINER_IMAGE", "CONTAINER_IMAGE"),
+    )
+    cpu_limit: float = Field(default=1.0, validation_alias=AliasChoices("AIVENV_CPU_LIMIT", "CPU_LIMIT"))
+    memory_limit: str = Field(default="512m", validation_alias=AliasChoices("AIVENV_MEMORY_LIMIT", "MEMORY_LIMIT"))
+    cleanup_on_exit: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("AIVENV_CLEANUP_ON_EXIT", "CLEANUP_ON_EXIT"),
+    )
+    execution_timeout_seconds: int = Field(
+        default=600,
+        validation_alias=AliasChoices(
+            "AIVENV_EXECUTION_TIMEOUT_SECONDS",
+            "EXECUTION_TIMEOUT_SECONDS",
+            "EXICUTION_TIMEOUT_SECONDS",
+        ),
+    )
+
+    @field_validator("host", "log_host", "openai_model", "container_image", "memory_limit")
+    @classmethod
+    def _non_empty_string(cls, v: str) -> str:
+        if not v:
+            raise ValueError("must not be empty")
+        return v
+
+    @field_validator("port", "log_port")
+    @classmethod
+    def _valid_port(cls, v: int) -> int:
+        if v < 1 or v > 65535:
+            raise ValueError("must be between 1 and 65535")
+        return v
+
+    @field_validator("cpu_limit")
+    @classmethod
+    def _positive_cpu_limit(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("must be greater than 0")
+        return v
+
+    @field_validator("execution_timeout_seconds")
+    @classmethod
+    def _positive_timeout(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("must be greater than 0")
+        return v
+
+    @property
+    def openai_api_key_value(self) -> str:
+        return self.openai_api_key.get_secret_value()
+
+    @property
+    def ngrok_authtoken_value(self) -> str:
+        return self.ngrok_authtoken.get_secret_value()
+
+    @property
+    def log_server_url(self) -> str:
+        return f"http://{self.log_host}:{self.log_port}"
+
+
+def load_settings(overrides: Mapping[str, Any] | None = None) -> Settings:
+    """Load settings, applying explicit CLI overrides after environment values."""
+
+    return Settings(**(dict(overrides) if overrides else {}))
