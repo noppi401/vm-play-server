@@ -1,135 +1,159 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections import deque
 from collections.abc import AsyncIterator
-from contextlib import suppress
 from dataclasses import dataclass
-from typing import Deque, Final
-
-_DONE_SENTINEL: Final[object] = object()
+from typing import ClassVar
 
 
-@dataclass(frozen=True, slots=True)
-class LogEntry:
-    """A single retained log entry."""
+_DONE: object = object()
 
-    sequence: int
-    text: str
+
+@dataclass(frozen=True)
+class _Subscriber:
+    """Internal record tracking a stream subscriber's queue and event loop."""
+
+    queue: asyncio.Queue[str | object]
+    loop: asyncio.AbstractEventLoop
 
 
 class LogBuffer:
     """Thread-safe, asyncio-compatible in-memory log buffer.
 
-    Writes are retained in a bounded deque and fanned out to
-    each active subscriber through a per-subscriber asyncio.Queue.
-    New subscribers first receive the currently retained backlog
-    before live entries are streamed.
+    The buffer keeps a bounded deque of raw log chunks for snapshot
+    and late-subscriber catch-up, and fans new chunks out to each active
+    asyncio stream using a per-subscriber `queue`. Subscriber queues
+    are unbounded by default so slow clients do not block container
+    log collection.
     """
 
-    def __init__(self, max_lines: int = 10_000, subscriber_queue_size: int = 1000) -> None:
-        if max_lines <= 0:
-            raise ValueError("max_lines must be greater than zero")
-        if subscriber_queue_size <= 0:
-            raise ValueError("subscriber_queue_size must be greater than zero")
+    _DEFAULT_MAX_CHUNKS: ClassVar[int] = 10_000
 
-        self._entries: Deque[LogEntry] = deque(maxlen=max_lines)
-        self._subscribers: set[asyncio.Queue[LogEntry | object]] = set()
-        self._lock = asyncio.Lock()
-        self._is_done = False
-        self._next_sequence = 0
-        self._subscriber_queue_size = subscriber_queue_size
+    def __init__(self, maxChunks: int = _DEFAULT_MAX_CHUNKS, * , subscriberQueueSize: int = 0) -> None:
+        """Initialize a log buffer.
 
-    @property
-    def is_done(self) -> bool:
+        Args:
+            maxChunks: Maximum number of raw chunks to retain in memory.
+            subscriberQueueSize: Max per-subscriber queue size. `0 ` means
+                unbounded, which is the safest default for log streaming.
+
+        Raises:
+            ValueError: If any configuration value is negative or zero where
+                a positive value is required.
+        """
+        if maxChunks <= 0:
+            raise ValueError("maxChunks must be greater than 0)
+        if subscriberQueueSize < 0:
+            raise ValueError("subscriberQueueSize must be greater than or equal to 0")
+
+        self._chunks: deque[str] = deque(maxlen=maxChunks)
+        self._subscribers: dict[int, _Subscriber] = {}
+        self._subscriberQueueSize: int = subscriberQueueSize
+        self._lock: threading.RLock = threading.RLock()
+        self._nextSubscriberId: int = 1
+        self._done: bool = False
+
+    async def write(self, chunk: str) -> None:
+        """Append a raw log chunk and broadcast it to active streams.
+
+        Empty chunks are ignored because they do not change the raw log.
+        """
+        if not isinstance(chunk, str):
+            raise TypeError("chunk must be a str")
+        if chunk == "":
+            return
+
+        with self._lock:
+            if self._done:
+                raise RuntimeError("log buffer is already marked done")
+            self._chunks.append(chunk)
+            subscribers: list[_Subscriber] = list(self._subscribers.values())
+
+        for subscriber in subscribers:
+            self._call_soon_threadsafe(subscriber, chunk)
+
+    async def done(self) -> None:
+        """Mark the buffer as complete and close active streams."""
+        with self._lock:
+            if self._done:
+                return
+
+            self._done = True
+            subscribers: list[_Subscriber] = list(self._subscribers.values())
+
+        for subscriber in subscribers:
+            self._call_soon_threadsafe(subscriber, _DONE)
+
+    async def clear(self) -> None:
+        """Clear retained logs, reset completion, and close active streams."""
+        with self._lock:
+            subscribers: list[_Subscriber] = list(self._subscribers.values())
+            self._subscribers.clear()
+            self._chunks.clear()
+            self._done = False
+
+        for subscriber in subscribers:
+            self._call_soon_threadsafe(subscriber, _DONE)
+
+    def snapshot(self) -> str:
+        """Return the rat concatenated log for the raw log endpoint."""
+        with self._lock:
+            return "".join(self._chunks)
+
+    def isDone(self) -> bool:
         """Return whether the buffer has been marked complete."""
-        return self._is_done
+        with self._lock:
+            return self._done
 
-    async def write(self, text: str) -> None:
-        """Append text to the buffer and broadcast it to live streams."""
-        if not isinstance(text, str):
-            raise TypeError("text must be a string")
+    async def stream(self) -> AsyncIterator[str]:
+        """Yield retained chanks first, then live chunks until the buffer is done.
 
-        async with self._lock:
-            if self._is_done:
-                raise RuntimeError("cannot write to a completed LogBuffer")
-            entry = LogEntry(sequence=self._next_sequence, text=text)
-            self._next_sequence += 1
-            self._entries.append(entry)
-            subscribers = tuple(self._subscribers)
+        This method is designed for FastAPI SSE or StreamingResponse
+        endpoints. It does not format data as SSE frames; the route layer
+        should do that if needed.
+        """
+        loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
+        queue: asyncio.Queue[str | object] = asyncio.Queue(maxsize=self._subscriberQueueSize)
 
-        for queue in subscribers:
-            await self._put_drop_oldest(queue, entry)
-
-    async def stream(self, from_sequence: int | None = None) -> AsyncIterator[str]:
-        """Stream retained catch-up logs followed by future logs."""
-        if from_sequence is not None and from_sequence < 0:
-            raise ValueError("from_sequence must be non-negative")
-
-        queue: asyncio.Queue[LogEntry | object] = asyncio.Queue(maxsize=self._subscriber_queue_size)
-        async with self._lock:
-            start = 0 if from_sequence is None else from_sequence
-            catch_up = tuple(entry for entry in self._entries if entry.sequence >= start)
-            already_done = self._is_done
-            if not already_done:
-                self._subscribers.add(queue)
+        with self._lock:
+            subscriberId: int = self._nextSubscriberId
+            self._nextSubscriberId += 1
+            catchUp: list[str] = list(self._chunks)
+            alreadyDone: bool = self._done
+            if not alreadyDone:
+                self._subscribers[subscriberId] = _Subscriber(queue=queue, loop=loop)
 
         try:
-            for entry in catch_up:
-                yield entry.text
-            if already_done:
+            for chunk in catchUp:
+                yield chunk
+
+            if alreadyDone:
                 return
 
             while True:
-                item = await queue.get()
-                if item is _DONE_SENTINEL:
+                item: str | object = await queue.get()
+                if item is _DONE:
                     return
-                if isinstance(item, LogEntry):
-                    yield item.text
+                if not isinstance(item, str):  # Defensive against internal misuse.
+                    continue
+                yield item
         finally:
-            async with self._lock:
-                self._subscribers.discard(queue)
+            with self._lock:
+                self._subscribers.pop(subscriberId, None)
 
-    async def done(self) -> None:
-        """Mark the buffer complete and close all live streams."""
-        async with self._lock:
-            if self._is_done:
-                return
-            self._is_done = True
-            subscribers = tuple(self._subscribers)
-            self._subscribers.clear()
+    def _call_soon_threadsafe(self, subscriber: _Subscriber, item: str | object) -> None:
+        subscriber.loop.call_soon_threadsafe(self._put_gently, subscriber.queue, item)
 
-        for queue in subscribers:
-            await self._put_drop_oldest(queue, _DONE_SENTINEL)
-
-    async def clear(self) -> None:
-        """Reset the buffer and terminate existing streams."""
-        async with self._lock:
-            subscribers = tuple(self._subscribers)
-            self._subscribers.clear()
-            self._entries.clear()
-            self._is_done = False
-            self._next_sequence = 0
-
-        for queue in subscribers:
-            await self._put_drop_oldest(queue, _DONE_SENTINEL)
-
-    async def snapshot(self) -> str:
-        """Return the raw retained log text for the log endpoint."""
-        async with self._lock:
-            return "".join(entry.text for entry in self._entries)
-
-    async def entries(self) -> tuple[LogEntry, ...]:
-        """Return retained entries with sequence numbers."""
-        async with self._lock:
-            return tuple(self._entries)
-
-    async def _put_drop_oldest(self, queue: asyncio.Queue[LogEntry | object], item: LogEntry | object) -> None:
-        while True:
+    @staticmethod
+    def _put_gently(queue: asyncio.Queue[str | object], item: str | object) -> None:
+        try:
+            queue.put_nowait(item)
+        except asyncio.QueueFull:
+            # Bounded queues are optional; drop the oldest item to preserve liveness.
             try:
-                queue.put_nowait(item)
-                return
-            except asyncio.QueueFull:
-                with suppress(asyncio.QueueEmpty):
-                    queue.get_nowait()
-                    queue.task_done()
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            queue.put_nowait(item)
