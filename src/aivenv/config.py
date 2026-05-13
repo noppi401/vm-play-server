@@ -9,7 +9,6 @@ from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-
 class Settings(BaseSettings):
     """Runtime settings loaded from environment variables and CLI overrides."""
 
@@ -17,6 +16,7 @@ class Settings(BaseSettings):
         env_prefix="AIVENV_",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,
     )
 
     openai_api_key: SecretStr = Field(
@@ -54,31 +54,31 @@ class Settings(BaseSettings):
 
     @field_validator("host", "log_host", "openai_model", "container_image", "memory_limit")
     @classmethod
-    def _non_empty_string(cls, v: str) -> str:
-        if not v:
+    def _non_empty_string(cls, value: str) -> str:
+        if not value.strip():
             raise ValueError("must not be empty")
-        return v
+        return value
 
     @field_validator("port", "log_port")
     @classmethod
-    def _valid_port(cls, v: int) -> int:
-        if v < 1 or v > 65535:
+    def _valid_port(cls, value: int) -> int:
+        if value < 1 or value > 65535:
             raise ValueError("must be between 1 and 65535")
-        return v
+        return value
 
     @field_validator("cpu_limit")
     @classmethod
-    def _positive_cpu_limit(cls, v: float) -> float:
-        if v <= 0:
+    def _positive_cpu_limit(cls, value: float) -> float:
+        if value <= 0:
             raise ValueError("must be greater than 0")
-        return v
+        return value
 
     @field_validator("execution_timeout_seconds")
     @classmethod
-    def _positive_timeout(cls, v: int) -> int:
-        if v <= 0:
+    def _positive_timeout(cls, value: int) -> int:
+        if value <= 0:
             raise ValueError("must be greater than 0")
-        return v
+        return value
 
     @property
     def openai_api_key_value(self) -> str:
@@ -93,7 +93,7 @@ class Settings(BaseSettings):
         return f"http://{self.log_host}:{self.log_port}"
 
 
-def load_settings(overrides: Mapping[str, Any] | None = None) -> Settings:
+def load_settings(overrides: Mapping[str, Any] | none = None) -> Settings:
     """Load settings, applying explicit CLI overrides after environment values."""
 
-    return Settings(**(dict(overrides) if overrides else {}))
+    return Settings***(dict(overrides) if overrides else {}))
