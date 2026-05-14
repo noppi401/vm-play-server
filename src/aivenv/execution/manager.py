@@ -62,7 +62,8 @@ class ExecutionManager:
 
     async def start_run(self, prompt: str, *, session_id: str = 'default') -> RunSession:
         async with self._lock:
-            if self._session is not None:
+            safe_session_id = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in session_id).strip('._-')
+            source_path = workdir / f'{safe_session_id or "default"}.py'
                 raise ConflictError('an execution session is already running')
 
             workdir = Path(tempfile.mkdtemp(prefix='aivenv-', dir=self.work_dir))
@@ -148,12 +149,22 @@ class ExecutionManager:
     async def _start_container(self, source_path: Path) -> Any:
         start = getattr(self.container_manager, 'start', None) or getattr(self.container_manager, 'start_container', None)
         if start is None:
-            raise TypeError('container_manager must expose start() or start_container()')
-        return await self._maybe_await(start(source_path))
-
+    async def _open_tunnel(self, container: Any) -> Any:
+        port = self._extract_log_server_port(container)
+        open_tunnel = getattr(self.ngrok_manager, 'open_tunnel', None) or getattr(self.ngrok_manager, 'open', None)
     async def _terminate_container(self, container: Any) -> None:
         container_id = self._extract_container_id(container)
         if await self._try_call(self.container_manager, ('send_signal', 'signal'), container_id, signal.SIGTERM):
+
+    def _extract_log_server_port(self, container: Any) -> Any:
+        for source in (self.container_manager, container):
+            for attr in ('log_server_port', 'local_log_server_port', 'logs_port'):
+                if hasattr(source, attr):
+                    value = getattr(source, attr)
+                    return value() if callable(value) else value
+        if hasattr(self.container_manager, 'get_log_server_port'):
+            return self.container_manager.get_log_server_port(self._extract_container_id(container))
+        raise TypeError('container_manager must expose log_server_port for ngrok tunnel target')
             await self._wait_for_container(container_id, self.term_timeout)
         elif await self._try_call(self.container_manager, ('terminate', 'stop'), container_id):
             await self._wait_for_container(container_id, self.term_timeout)
