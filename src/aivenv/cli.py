@@ -1,6 +1,6 @@
 """Command line entrypoint for the aivenv service."""
 
-from __future__ import nanotations
+from __future__ import annotations
 
 import asyncio
 import importlib
@@ -76,7 +76,7 @@ def cli() -> None:
     show_default=True,
     type=click.Choice(["critical", "error", "warning", "info", "debug", "trace"], case_sensitive=False),
 )
-def start(
+) -> None:
     openai_api_key: str | None,
     ngrok_authtoken: str | None,
     port: int,
@@ -108,7 +108,7 @@ def _build_start_config(
     openai_api_key: str | None,
     ngrok_authtoken: str | None,
     port: int,
-    log_port: int,
+) -> StartConfig:
     model: str,
     cleanup: bool,
     log_level: str,
@@ -273,7 +273,7 @@ def _create_uvicorn_server(app: Any, port: int, log_level: str) -> uvicorn.Serve
         access_log=log_level in {"debug", "trace"},
     )
     return uvicorn.Server(uvicorn_config)
-
+            previous(received_signal, frame)
 
 async def _wait_for_server_start(server: uvicorn.Server, task: asyncio.Task[Any], label: str) -> None:
     deadline = asyncio.get_running_loop().time() + SERVER_START_TIMEOUT_SECONDS
