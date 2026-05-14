@@ -12,8 +12,9 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - requests is installed with docker-py
     ReadTimeout = TimeoutError  # type: ignore[assignment]
 
-try:
-    import docker
+except ModuleNotFoundError:  # pragma: no cover - exercised only when dependency is absent
+    docker = None  # type: ignore[assignment]
+_END_OF_STREAM = object()
 except ModuleNotFoundError:  # pragma: no cover - exercised only when dependency is absent
 _END_OF_STREAM = object()
 
@@ -110,7 +111,31 @@ class ContainerManager:
             "mem_limit": self._memory_limit,
             "nano_cpus": int(self._cpu_limit * 1_000_000_000),
         }
-        if name:
+        active_container = container or self._container
+        if active_container is None:
+            raise ContainerManagerError("no container is available to stop")
+
+        active_container.kill(signal=signal.SIGTERM)
+        if not _wait_for_container(active_container, timeout):
+            active_container.kill(signal=signal.SIGKILL)
+            _wait_for_container(active_container, kill_timeout)
+
+        if active_container is self._container:
+            self._container = None
+
+    def cleanup_orphans(self) -> int:
+        """Remove containers previously created by this manager."""
+
+        containers = self._client.containers.list(
+            all=True,
+            filters={"label": ["aivenv=true", "aivenv.managed=true"]},
+        )
+
+        removed = 0
+        for container in containers:
+            container.remove(force=True)
+            removed += 1
+        return removed
             run_kwargs["name"] = name
         if environment:
             run_kwargs["environment"] = dict(environment)
@@ -128,41 +153,6 @@ class ContainerManager:
         iterator = iter(active_container.logs(stream=True, follow=True, stdout=True, stderr=True))
         try:
             while True:
-                chunk = await asyncio.to_thread(_next_chunk, iterator)
-                if chunk is _END_OF_STREAM:
-                    break
-                await log_buffer.write(_decode_chunk(chunk))
-        finally:
-            close = getattr(iterator, "close", None)
-            if close is not None:
-                close()
-            await log_buffer.done()
-
-    def stop(self, *, timeout: float = 10.0, kill_timeout: float = 5.0, container: Any | None = None) -> None:
-        """Stop a container with SIGTERM first, then SIGKILL if it times out."""
-
-            removed += 1
-        return removed
-
-
-def _decode_chunk(chunk: Any) -> str:
-    if isinstance(chunk, bytes):
-        return chunk.decode("utf-8", errors="replace")
-    if isinstance(chunk, str):
-        return chunk
-    return str(chunk)
-
-
-def _next_chunk(iterator: Any) -> Any:
-    try:
-        return next(iterator)
-    except StopIteration:
-        return _END_OF_STREAM
-    except (TimeoutError, ReadTimeout):
-        return _END_OF_STREAM
-            filters={"label": ["aivenv=true", "aivenv.managed=true"]},
-        )
-
         removed = 0
         for container in containers:
             container.remove(force=True)
