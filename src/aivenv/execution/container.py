@@ -170,20 +170,20 @@ class ContainerManager:
         for container in containers:
             container.remove(force=True)
             removed += 1
-        return removed
-
-
-_END_OF_STREAM = object()
-
-
+def _decode_chunk(chunk: Any) -> str:
+    if isinstance(chunk, bytes):
+        return chunk.decode("utf-8", errors="replace")
+    if isinstance(chunk, str):
+        return chunk
+    return str(chunk)
 def _next_chunk(iterator: Any) -> Any:
     try:
         return next(iterator)
     except (TimeoutError, ReadTimeout):
         return _END_OF_STREAM
 
-
-def _decode_chunk(chunk: Any) -> str:
+    except (TimeoutError, ReadTimeout):
+        return False
     if isinstance(chunk, bytes):
     except (TimeoutError, ReadTimeout):
     if isinstance(chunk, str):
