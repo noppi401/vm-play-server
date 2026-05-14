@@ -85,8 +85,8 @@ def create_execution_manager(settings: Settings | None = None) -> ExecutionManag
     )
     return ExecutionManager(
         code_generator,
-        container_manager,
-        ngrok_manager,
+
+
         cleanup_on_stop=settings.cleanup_on_exit,
     )
 def _session_url(session: Any) -> str | None:
@@ -113,23 +113,33 @@ def _session_id(session: Any) -> str:
         or getattr(session, "session_id", None)
         or getattr(session, "id", None)
     )
-    if session_id is None:
-        raise ValueError("Execution session did not provide an id.")
-    return str(session_id)
-
-
-def _session_url(session: Any) -> str | None:
 def _log_background_start_error(task: asyncio.Task[Any]) -> None:
     try:
         task.result()
     except Exception:  # noqa: BLE001
         logger.exception("failed to start execution in the background")
 
-        return RunResponse(
-            execution_id=_session_id(current_session) if current_session is not None else f"pending-{uuid4().hex}",
-            result_url=_session_url(current_session) if current_session is not None else None,
-            status=ExecutionStatus.RUNNING,
-        )
+
+@app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
+async def run(
+    request: RunRequest,
+    manager: ExecutionManager = Depends(get_execution_manager),
+) -> RunResponse | JSONResponse:
+    try:
+        start_task = asyncio.create_task(_maybe_await(manager.start_run(request.instruction)))
+        try:
+            session = await asyncio.wait_for(
+                asyncio.shield(start_task),
+                timeout=RUN_START_RESPONSE_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            start_task.add_done_callback(_log_background_start_error)
+            current_session = getattr(manager, "current_session", None)
+            return RunResponse(
+                execution_id=_session_id(current_session) if current_session is not None else f"pending-{uuid4().hex}",
+                result_url=_session_url(current_session) if current_session is not None else None,
+                status=ExecutionStatus.RUNNING,
+            )
     except AivenvError as exc:
         return _map_execution_error(exc)
     except ValueError as exc:
@@ -143,11 +153,6 @@ def _log_background_start_error(task: asyncio.Task[Any]) -> None:
         result_url=_session_url(session),
         status=ExecutionStatus.RUNNING,
     )
-        logger.exception("failed to start execution")
-        return _error_response(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_server_error", "Failed to start execution.")
-
-    return RunResponse(
-        execution_id=_session_id(session),
         result_url=_session_url(session),
         status=ExecutionStatus.RUNNING,
     )
