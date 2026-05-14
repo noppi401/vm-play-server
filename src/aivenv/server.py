@@ -21,7 +21,6 @@ from aivenv.execution.errors import AivenvError, ConfigError
 from aivenv.execution.manager import ExecutionManager
 from aivenv.execution.models import ErrorResponse, ExecutionStatus, RunRequest, RunResponse, StopResponse
 from aivenv.log_server import PORT as LOG_PORT, get_log_buffer
-from aivenv.tunnel.ngrok_manager import NgrokManager
 
 LOCALHOST = "127.0.0.1"
 PORT = 8080
@@ -67,15 +66,10 @@ def create_execution_manager(settings: Settings | None = None) -> ExecutionManag
         cpu_limit=settings.cpu_limit,
         memory_limit=settings.memory_limit,
     )
-    ngrok_manager = NgrokManager(
-        log_server_port=settings.log_port,
-        auth_token=settings.ngrok_authtoken_value,
-        api_key=settings.ngrok_api_key_value,
-    )
     return ExecutionManager(
         code_generator,
         container_manager,
-        ngrok_manager,
+        ngrok_manager=None,
         cleanup_on_stop=settings.cleanup_on_exit,
         log_buffer_factory=get_log_buffer,
     )
@@ -177,6 +171,18 @@ def create_app(execution_manager: ExecutionManager | None = None) -> FastAPI:
             status=ExecutionStatus.STOPPED,
             message="Execution stopped.",
         )
+
+    @app.get("/current")
+    async def current(
+        manager: ExecutionManager = Depends(manager_dependency),
+    ) -> JSONResponse:
+        current_session = getattr(manager, "current_session", None)
+        if current_session is None:
+            return JSONResponse({"active": False})
+        eid = _session_id(current_session)
+        public_url = _session_url(current_session)
+        result_url = f"{public_url.rstrip('/')}/?id={eid}" if public_url else None
+        return JSONResponse({"active": True, "execution_id": eid, "result_url": result_url})
 
     return app
 

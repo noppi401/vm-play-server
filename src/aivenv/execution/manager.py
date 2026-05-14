@@ -79,7 +79,7 @@ class ExecutionManager:
                 try:
                     tunnel = await self._open_tunnel(container)
                 except Exception as _tunnel_exc:
-                    self.logger.warning("ngrok tunnel unavailable: %s", _tunnel_exc, exc_info=True)
+                    self.logger.warning("ngrok tunnel unavailable: %s", _tunnel_exc)
                     tunnel = None
                 session = RunSession(
                     session_id=run_id,
@@ -158,6 +158,10 @@ class ExecutionManager:
             self.logger.warning("log streaming error: %s", exc)
         finally:
             await log_buffer.done()
+            async with self._lock:
+                if self._session is session:
+                    self._session = None
+            await self._stop_session(session, cleanup=self.cleanup_on_stop)
 
     async def _stop_session(self, session: RunSession, *, cleanup: bool) -> None:
         with contextlib.suppress(Exception):
