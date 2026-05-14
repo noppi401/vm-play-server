@@ -24,10 +24,10 @@ class FakeContainer:
         self.kill_signals.append(signal)
 
     def wait(self, *, timeout: float | None = None):
-            raise ReadTimeout
+        self.wait_calls.append(timeout)
         if self.wait_timeouts > 0:
             self.wait_timeouts -= 1
-            raise TimeoutError
+            raise ReadTimeout
         return {"StatusCode": 0}
 
     def remove(self, *, force: bool) -> None:

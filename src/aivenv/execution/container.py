@@ -185,7 +185,7 @@ def _next_chunk(iterator: Any) -> Any:
 
 def _decode_chunk(chunk: Any) -> str:
     if isinstance(chunk, bytes):
-        return chunk.decode("utf-8", errors="replace")
+    except (TimeoutError, ReadTimeout):
     if isinstance(chunk, str):
         return chunk
     return str(chunk)
