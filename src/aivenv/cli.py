@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from types import FrameType
 from typing import Any, Awaitable, Callable, Iterable
 
-
 import click
 import uvicorn
 
@@ -52,15 +51,15 @@ class StartupError(click.ClickException):
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
-def start(
-    openai_api_key: str | None,
-    ngrok_authtoken: str | None,
-    port: int,
-    log_port: int,
-    model: str,
-    cleanup: bool,
-    log_level: str,
-) -> None:
+    """Manage the aivenv service."""
+
+
+@cli.command()
+@click.option(
+    "--openai-api-key",
+    envvar="OPENAI_API_KEY",
+    help="OpenAI API key. Can also be set with OPENAI_API_KEY.",
+)
 @click.option(
     "--ngrok-authtoken",
     envvar="NGROK_AUTHTOKEN",
@@ -76,13 +75,7 @@ def start(
     show_default=True,
     type=click.Choice(["critical", "error", "warning", "info", "debug", "trace"], case_sensitive=False),
 )
-) -> None:
-    openai_api_key: str | None,
-    ngrok_authtoken: str | None,
-    port: int,
-    log_port: int,
-def _build_start_config(
-    *,
+def start(
     openai_api_key: str | None,
     ngrok_authtoken: str | None,
     port: int,
@@ -90,7 +83,13 @@ def _build_start_config(
     model: str,
     cleanup: bool,
     log_level: str,
-) -> StartConfig:
+) -> None:
+    """Start the aivenv API and log servers."""
+
+    config = _build_start_config(
+        openai_api_key=openai_api_key,
+        ngrok_authtoken=ngrok_authtoken,
+        port=port,
         log_port=log_port,
         model=model,
         cleanup=cleanup,
@@ -108,11 +107,11 @@ def _build_start_config(
     openai_api_key: str | None,
     ngrok_authtoken: str | None,
     port: int,
-) -> StartConfig:
+    log_port: int,
     model: str,
     cleanup: bool,
     log_level: str,
-J -> StartConfig:
+) -> StartConfig:
     """Validate CLI/env configuration and return a normalized StartConfig."""
 
     missing: list[str] = []
@@ -212,6 +211,7 @@ async def _run_start(config: StartConfig) -> None:
         click.echo(f"aivenv: starting API server at http://127.0.0.1:{config.port}")
         click.echo("aivenv: awaiting requests. Send POST /run to start an execution.")
         await api_server.serve()
+    finally:
         api_server.should_exit = True
         log_server.should_exit = True
         await graceful_shutdown()
@@ -236,7 +236,7 @@ def _create_log_app(config: StartConfig) -> Any:
         module_name="aivenv.log_server",
         factory_names=("create_log_app", "create_app", "app"),
         config=config,
-            previous(received_signal, frame)
+        label="log server",
     )
 
 
@@ -253,94 +253,119 @@ def _call_app_factory(*, module_name: str, factory_names: Iterable[str], config:
         if factory_name == "app" and not callable(candidate):
             return candidate
         if callable(candidate):
+            return _invoke_app_factory(candidate, config)
+
+    expected = ", ".join(factory_names)
+    raise StartupError(f"Unable to start {label}: module '{module_name}' does not expose one of: {expected}.")
+
+
+def _invoke_app_factory(factory: Callable[..., Any], config: StartConfig) -> Any:
+    try:
+        return factory(config=config)
+    except TypeError as keyword_error:
+        try:
+            return factory(config)
+        except TypeError:
             try:
-                return candidate(config)
+                return factory()
             except TypeError:
-                return candidate()
-
-    names = ", ".join(factory_names)
-    raise StartupError(f"Unable to start {label}: '{module_name}' must expose one of {names}.")
+                raise keyword_error
 
 
-def _create_uvicorn_server(app: Any, port: int, log_level: str) -> uvicorn.Server:
+def _create_uvicorn_server(app: Any, port: int, log_level: str) -> ManagedServer:
     uvicorn_config = uvicorn.Config(
         app=app,
         host="127.0.0.1",
         port=port,
         log_level=log_level,
         lifespan="on",
-        access_log=log_level in {"debug", "trace"},
     )
     return uvicorn.Server(uvicorn_config)
-            previous(received_signal, frame)
 
-async def _wait_for_server_start(server: uvicorn.Server, task: asyncio.Task[Any], label: str) -> None:
+
+async def _wait_for_server_start(server: ManagedServer, task: asyncio.Task[None], label: str) -> None:
     deadline = asyncio.get_running_loop().time() + SERVER_START_TIMEOUT_SECONDS
-    while not server.started:
+    while not getattr(server, "started", False):
         if task.done():
-            exc = task.exception()
-            message = f"{label} exited before startup completed."
-            if exc is not None:
-                raise StartupError(f"{message} {exc}") from exc
-            raise StartupError(message)
+            await task
         if asyncio.get_running_loop().time() >= deadline:
             server.should_exit = True
             raise StartupError(f"Timed out waiting for {label} to start.")
         await asyncio.sleep(0.05)
 
 
-def _install_signal_handlers(loop: asyncio.AbstractEventLoop, servers: Iterable[uvicorn.Server]) -> None:
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, lambda sig=sig: asyncio.create_task(_handle_shutdown_signal(sig, servers)))
-        except (NotImplementedError, RuntimeError):
-            previous_handler = signal.getsignal(sig)
-
-            def _handler(received: int, frame: FrameType | None, *, previous: Any = previous_handler) -> None:
-                asyncio.create_task(_handle_shutdown_signal(signal.Signals(received), servers))
-                if callable(previous) and previous not in (signal.SIG_DFL, signal.SIG_IGN):
-                    previous(coreceived, frame)
-
-            signal.signal(sig, _handler)
-
-
-async def _handle_shutdown_signal(sig: signal.Signals, servers: Iterable[uvicorn.Server]) -> None:
-    click.echo(f"aivenv: received {sig.name}; shutting down gracefully...")
-    for server in servers:
-        server.should_exit = True
-    await graceful_shutdown()
-
-
-async def graceful_shutdown() -> None:
-    """Stop managed servers and delegate runtime cleanup to the execution subsystem when present."""
-
-    for server in tuple(_managed_servers):
-        server.should_exit = True
-
-    for module_name, function_name in _external_shutdown_hooks:
-        try:
-            module = importlib.import_module(module_name)
-        except ModuleNotFoundError:
-            continue
-        shutdown = getattr(module, function_name, None)
-        if not callable(shutdown):
-            continue
-        result = shutdown()
-        if asyncio.iscoroutine(result):
-            await result
-        return
-
-
-async def _await_background_task(task: asyncio.Task[Any]) -> None:
+async def _await_background_task(task: asyncio.Task[None]) -> None:
     if task.done():
-        task.result()
+        await task
         return
 
     try:
         await asyncio.wait_for(task, timeout=SERVER_START_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
         task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+
+
+def _install_signal_handlers(loop: asyncio.AbstractEventLoop, servers: Iterable[ManagedServer]) -> None:
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        _install_signal_handler(loop, signum, tuple(servers))
+
+
+def _install_signal_handler(
+    loop: asyncio.AbstractEventLoop,
+    signum: signal.Signals,
+    servers: tuple[ManagedServer, ...],
+) -> None:
+    def request_shutdown() -> None:
+        for server in servers:
+            server.should_exit = True
+        loop.create_task(graceful_shutdown())
+
+    try:
+        loop.add_signal_handler(signum, request_shutdown)
+    except (NotImplementedError, RuntimeError):
+        previous = signal.getsignal(signum)
+
+        def fallback(received_signal: int, frame: FrameType | None) -> None:
+            request_shutdown()
+            if callable(previous):
+                previous(received_signal, frame)
+
+        signal.signal(signum, fallback)
+
+
+async def graceful_shutdown() -> None:
+    """Request shutdown for managed servers and run any runtime cleanup hooks."""
+
+    for server in tuple(_managed_servers):
+        server.should_exit = True
+
+    for module_name, function_name in _external_shutdown_hooks:
+        hook = _load_shutdown_hook(module_name, function_name)
+        if hook is None:
+            continue
+        result = hook()
+        if _is_awaitable(result):
+            await result
+
+
+def _load_shutdown_hook(module_name: str, function_name: str) -> Callable[[], Any] | None:
+    try:
+        module = importlib.import_module(module_name)
+    except ModuleNotFoundError:
+        return None
+
+    hook = getattr(module, function_name, None)
+    if callable(hook):
+        return hook
+    return None
+
+
+def _is_awaitable(value: Any) -> bool:
+    return isinstance(value, Awaitable) or hasattr(value, "__await__")
 
 
 if __name__ == "__main__":
