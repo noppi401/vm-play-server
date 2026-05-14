@@ -1,0 +1,139 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from fastapi.testclient import TestClient
+
+from aivenv.execution.errors import ConflictError, NotFoundError
+from aivenv.server import app, get_execution_manager, main
+
+
+@dataclass
+class FakeSession:
+    session_id: str = "run-1"
+    public_url: str | None = "https://example.ngrok-free.app"
+
+
+class FakeManager:
+    def __init__(self) -> None:
+        self.current_session: FakeSession | None = FakeSession()
+
+    async def start_run(self, instruction: str) -> FakeSession:
+        return FakeSession()
+
+    async def stop_run(self) -> None:
+        self.current_session = None
+
+
+class ConflictManager(FakeManager):
+    async def start_run(self, instruction: str) -> FakeSession:
+        raise ConflictError("an execution session is already running")
+
+
+class FailingManager(FakeManager):
+    async def start_run(self, instruction: str) -> FakeSession:
+        raise RuntimeError("boom")
+
+
+class NotFoundManager(FakeManager):
+    def __init__(self) -> None:
+        self.current_session = None
+
+    async def stop_run(self) -> None:
+        raise NotFoundError("no execution session is running")
+
+
+def client_with(manager: FakeManager) -> TestClient:
+    app.dependency_overrides[get_execution_manager] = lambda: manager
+    return TestClient(app)
+
+
+def teardown_function() -> None:
+    app.dependency_overrides.clear()
+
+
+def test_run_returns_accepted_response() -> None:
+    client = client_with(FakeManager())
+
+    response = client.post("/run", json={"instruction": "print hello"})
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "execution_id": "run-1",
+        "result_url": "https://example.ngrok-free.app",
+        "status": "running",
+    }
+
+
+def test_run_validation_errors_are_bad_request() -> None:
+    client = client_with(FakeManager())
+
+    response = client.post("/run", json={"instruction": "   "})
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "bad_request"
+
+
+def test_run_conflict_maps_to_409() -> None:
+    client = client_with(ConflictManager())
+
+    response = client.post("/run", json={"instruction": "print hello"})
+
+    assert response.status_code == 409
+    assert response.json() == {
+        "error": "conflict",
+        "message": "an execution session is already running",
+    }
+
+
+def test_run_unexpected_error_maps_to_500() -> None:
+    client = client_with(FailingManager())
+
+    response = client.post("/run", json={"instruction": "print hello"})
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "error": "internal_server_error",
+        "message": "Failed to start execution.",
+    }
+
+
+def test_stop_returns_ok_response() -> None:
+    client = client_with(FakeManager())
+
+    response = client.post("/stop")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "execution_id": "run-1",
+        "status": "stopped",
+        "message": "Execution stopped.",
+    }
+
+
+def test_stop_not_found_maps_to_404() -> None:
+    client = client_with(NotFoundManager())
+
+    response = client.post("/stop")
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "error": "not_found",
+        "message": "no execution session is running",
+    }
+
+
+def test_main_binds_to_localhost(monkeypatch) -> None:
+    captured = {}
+
+    def fake_run(target_app, *, host: str, port: int) -> None:
+        captured["app"] = target_app
+        captured["host"] = host
+        captured["port"] = port
+
+    monkeypatch.setattr("aivenv.server.uvicorn.run", fake_run)
+    monkeypatch.setattr("aivenv.server.load_settings", lambda overrides=None: type("S", (), {"port": 8080})())
+
+    main()
+
+    assert captured == {"app": app, "host": "127.0.0.1", "port": 8080}
