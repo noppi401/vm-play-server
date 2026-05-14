@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from http import HTTPStatus
@@ -107,12 +108,35 @@ def _session_id(session: Any) -> str:
         raise ValueError("Execution session did not provide an id.")
     return str(session_id)
 
+    return str(url) if url is not None else None
 
-def _session_url(session: Any) -> str | None:
-    url = (
-        getattr(session, "result_url", None)
-        or getattr(session, "public_url", None)
-        or getattr(session, "url", None)
+
+def _log_background_start_result(task: asyncio.Future[Any]) -> None:
+    try:
+        task.result()
+    except Exception:  # noqa: BLE001
+        logger.exception("execution startup failed after accepted response")
+
+
+@app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
+async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execution_manager)) -> RunResponse | JSONResponse:
+    try:
+        start_result = manager.start_run(request.instruction)
+        if inspect.isawaitable(start_result):
+            start_task = asyncio.ensure_future(start_result)
+            try:
+                session = await asyncio.wait_for(
+                    asyncio.shield(start_task),
+                    timeout=RUN_START_RESPONSE_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                start_task.add_done_callback(_log_background_start_result)
+                session = getattr(manager, "current_session", None)
+                if session is None:
+                    raise RuntimeError("Execution did not expose a session before startup completed.")
+        else:
+            session = start_result
+    except AivenvError as exc:
     )
     return str(url) if url is not None else None
 @app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
