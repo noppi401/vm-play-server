@@ -7,15 +7,17 @@ import signal
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Protocol
+
+try:
+    import docker
+except ModuleNotFoundError:  # pragma: no cover - exercised only when dependency is absent
+    docker = None  # type: ignore[assignment]
+
 try:
     from requests.exceptions import ReadTimeout
 except ModuleNotFoundError:  # pragma: no cover - requests is installed with docker-py
     ReadTimeout = TimeoutError  # type: ignore[assignment]
 
-except ModuleNotFoundError:  # pragma: no cover - exercised only when dependency is absent
-    docker = None  # type: ignore[assignment]
-_END_OF_STREAM = object()
-except ModuleNotFoundError:  # pragma: no cover - exercised only when dependency is absent
 _END_OF_STREAM = object()
 
 
@@ -111,6 +113,40 @@ class ContainerManager:
             "mem_limit": self._memory_limit,
             "nano_cpus": int(self._cpu_limit * 1_000_000_000),
         }
+        if name:
+            run_kwargs["name"] = name
+        if environment:
+            run_kwargs["environment"] = dict(environment)
+
+        self._container = self._client.containers.run(**run_kwargs)
+        return self._container
+
+    async def stream_logs(self, log_buffer: _LogBuffer, container: Any | None = None) -> None:
+        """Stream Docker stdout/stderr into a LogBuffer until the stream ends."""
+
+        active_container = container or self._container
+        if active_container is None:
+            raise ContainerManagerError("no container is available for log streaming")
+
+        iterator = iter(active_container.logs(stream=True, follow=True, stdout=True, stderr=True))
+        try:
+            while True:
+                chunk = await asyncio.to_thread(_next_chunk, iterator)
+                if chunk is _END_OF_STREAM:
+                    break
+                await log_buffer.write(_decode_chunk(chunk))
+        finally:
+            await log_buffer.done()
+
+    def stop(
+        self,
+        *,
+        container: Any | None = None,
+        timeout: float = 10,
+        kill_timeout: float = 2,
+    ) -> None:
+        """Stop a running container, escalating from SIGTERM to SIGKILL on timeout."""
+
         active_container = container or self._container
         if active_container is None:
             raise ContainerManagerError("no container is available to stop")
@@ -136,43 +172,20 @@ class ContainerManager:
             container.remove(force=True)
             removed += 1
         return removed
-            run_kwargs["name"] = name
-        if environment:
-            run_kwargs["environment"] = dict(environment)
 
-        self._container = self._client.containers.run(**run_kwargs)
-        return self._container
 
-    async def stream_logs(self, log_buffer: _LogBuffer, container: Any | None = None) -> None:
-        """Stream Docker stdout/stderr into a LogBuffer until the stream ends."""
-
-        active_container = container or self._container
-        if active_container is None:
-            raise ContainerManagerError("no container is available for log streaming")
-
-        iterator = iter(active_container.logs(stream=True, follow=True, stdout=True, stderr=True))
-        try:
-            while True:
-        removed = 0
-        for container in containers:
-            container.remove(force=True)
-            removed += 1
-    except (TimeoutError, ReadTimeout):
-        return False
-        return chunk.decode("utf-8", errors="replace")
-    if isinstance(chunk, str):
-        return chunk
-    return str(chunk)
 def _next_chunk(iterator: Any) -> Any:
     try:
         return next(iterator)
+    except StopIteration:
+        return _END_OF_STREAM
     except (TimeoutError, ReadTimeout):
         return _END_OF_STREAM
 
-    except (TimeoutError, ReadTimeout):
-        return False
+
+def _decode_chunk(chunk: Any) -> str:
     if isinstance(chunk, bytes):
-    except (TimeoutError, ReadTimeout):
+        return chunk.decode("utf-8", errors="replace")
     if isinstance(chunk, str):
         return chunk
     return str(chunk)
@@ -182,7 +195,7 @@ def _wait_for_container(container: Any, timeout: float) -> bool:
     try:
         container.wait(timeout=timeout)
         return True
-    except TimeoutError:
+    except (TimeoutError, ReadTimeout):
         return False
     except TypeError:
         container.wait()
