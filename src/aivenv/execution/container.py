@@ -7,6 +7,10 @@ import signal
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Protocol
+try:
+    from requests.exceptions import ReadTimeout
+except ModuleNotFoundError:  # pragma: no cover - requests is installed with docker-py
+    ReadTimeout = TimeoutError  # type: ignore[assignment]
 
 try:
     import docker
@@ -175,7 +179,7 @@ _END_OF_STREAM = object()
 def _next_chunk(iterator: Any) -> Any:
     try:
         return next(iterator)
-    except StopIteration:
+    except (TimeoutError, ReadTimeout):
         return _END_OF_STREAM
 
 

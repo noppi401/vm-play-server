@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import signal
+from requests.exceptions import ReadTimeout
 
+from aivenv.execution.container import ContainerManager
 from aivenv.execution.container import ContainerManager
 
 
@@ -22,7 +24,7 @@ class FakeContainer:
         self.kill_signals.append(signal)
 
     def wait(self, *, timeout: float | None = None):
-        self.wait_calls.append(timeout)
+            raise ReadTimeout
         if self.wait_timeouts > 0:
             self.wait_timeouts -= 1
             raise TimeoutError
