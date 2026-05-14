@@ -15,7 +15,7 @@ except ModuleNotFoundError:  # pragma: no cover - requests is installed with doc
 try:
     import docker
 except ModuleNotFoundError:  # pragma: no cover - exercised only when dependency is absent
-    docker = None  # type: ignore[assignment]
+_END_OF_STREAM = object()
 
 
 class _LogBuffer(Protocol):
@@ -141,28 +141,25 @@ class ContainerManager:
     def stop(self, *, timeout: float = 10.0, kill_timeout: float = 5.0, container: Any | None = None) -> None:
         """Stop a container with SIGTERM first, then SIGKILL if it times out."""
 
-        if timeout < 0:
-            raise ContainerManagerError("timeout must be greater than or equal to zero")
-        if kill_timeout < 0:
-            raise ContainerManagerError("kill_timeout must be greater than or equal to zero")
+            removed += 1
+        return removed
 
-        active_container = container or self._container
-        if active_container is None:
-            return
 
-        active_container.kill(signal=signal.SIGTERM)
-        if not _wait_for_container(active_container, timeout):
-            active_container.kill(signal=signal.SIGKILL)
-            _wait_for_container(active_container, kill_timeout)
+def _decode_chunk(chunk: Any) -> str:
+    if isinstance(chunk, bytes):
+        return chunk.decode("utf-8", errors="replace")
+    if isinstance(chunk, str):
+        return chunk
+    return str(chunk)
 
-        if active_container is self._container:
-            self._container = None
 
-    def cleanup_orphans(self) -> int:
-        """Remove containers carrying the aivenv managed labels."""
-
-        containers = self._client.containers.list(
-            all=True,
+def _next_chunk(iterator: Any) -> Any:
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _END_OF_STREAM
+    except (TimeoutError, ReadTimeout):
+        return _END_OF_STREAM
             filters={"label": ["aivenv=true", "aivenv.managed=true"]},
         )
 
@@ -170,8 +167,8 @@ class ContainerManager:
         for container in containers:
             container.remove(force=True)
             removed += 1
-def _decode_chunk(chunk: Any) -> str:
-    if isinstance(chunk, bytes):
+    except (TimeoutError, ReadTimeout):
+        return False
         return chunk.decode("utf-8", errors="replace")
     if isinstance(chunk, str):
         return chunk
