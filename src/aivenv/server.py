@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
 from http import HTTPStatus
@@ -22,7 +21,6 @@ from aivenv.execution.errors import AivenvError, ConfigError, ConflictError, Not
 from aivenv.execution.manager import ExecutionManager
 from aivenv.execution.models import ErrorResponse, ExecutionStatus, RunRequest, RunResponse, StopResponse
 from aivenv.tunnel.ngrok_manager import NgrokManager
-
 LOCALHOST = "127.0.0.1"
 PORT = 8080
 RUN_START_RESPONSE_TIMEOUT_SECONDS = 1.9
@@ -104,11 +102,6 @@ def get_execution_manager() -> ExecutionManager:
 async def _maybe_await(value: Any) -> Any:
     if inspect.isawaitable(value):
         return await value
-    return value
-
-
-def _session_id(session: Any) -> str:
-    session_id = (
         getattr(session, "execution_id", None)
         or getattr(session, "session_id", None)
         or getattr(session, "id", None)
@@ -116,21 +109,8 @@ def _session_id(session: Any) -> str:
     return str(session_id) if session_id is not None else f"unknown-{uuid4().hex}"
 def _log_background_start_error(task: asyncio.Task[Any]) -> None:
     try:
-        task.result()
-    except Exception:  # noqa: BLE001
-        logger.exception("failed to start execution in the background")
-
-
-@app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
-async def run(
-    request: RunRequest,
-    manager: ExecutionManager = Depends(get_execution_manager),
-) -> RunResponse | JSONResponse:
     try:
-        start_task = asyncio.create_task(_maybe_await(manager.start_run(request.instruction)))
-        try:
-            session = await asyncio.wait_for(
-                asyncio.shield(start_task),
+        session = await _maybe_await(manager.start_run(request.instruction))
                 timeout=RUN_START_RESPONSE_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
