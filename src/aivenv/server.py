@@ -9,7 +9,8 @@ from http import HTTPStatus
 from typing import Any
 from uuid import uuid4
 
-import uvicorn
+from fastapi import Depends, FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -35,7 +36,7 @@ def _error_response(status_code: int, error: str, message: str, details: dict[st
     body = ErrorResponse(error=error, message=message, details=details)
     return JSONResponse(status_code=status_code, content=body.model_dump(exclude_none=True))
 
-
+        {"errors": jsonable_encoder(exc.errors())},
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     return _error_response(
@@ -125,13 +126,30 @@ def _log_background_start_error(task: asyncio.Task[Any]) -> None:
     except Exception:  # noqa: BLE001
         logger.exception("failed to start execution in the background")
 
+        current_session = getattr(manager, "current_session", None)
+        if current_session is None:
+            try:
+                session = await start_task
+            except AivenvError as exc:
+                return _map_execution_error(exc)
+            except ValueError as exc:
+                return _error_response(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+            except Exception:  # noqa: BLE001
+                logger.exception("failed to start execution")
+                return _error_response(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_server_error", "Failed to start execution.")
 
-@app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
-async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execution_manager)) -> RunResponse | JSONResponse:
-    try:
-        start_task = asyncio.create_task(_maybe_await(manager.start_run(request.instruction)))
-        session = await asyncio.wait_for(
-            asyncio.shield(start_task),
+            return RunResponse(
+                execution_id=_session_id(session),
+                result_url=_session_url(session),
+                status=ExecutionStatus.RUNNING,
+            )
+
+        start_task.add_done_callback(_log_background_start_error)
+        return RunResponse(
+            execution_id=_session_id(current_session),
+            result_url=_session_url(current_session),
+            status=ExecutionStatus.RUNNING,
+        )
             timeout=RUN_START_RESPONSE_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:
