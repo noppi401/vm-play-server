@@ -34,7 +34,7 @@ class _FakeCompletions:
         self.calls: list[dict[str, Any]] = []
 
     async def create(self, **kwargs: Any) -> Any:
-        self.calls.append(kargs)
+        self.calls.append(kwargs)
         if self.delay:
             await asyncio.sleep(self.delay)
         if self.error is not None:

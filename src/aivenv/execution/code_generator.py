@@ -28,11 +28,11 @@ Never include secrets, credentials, or host-specific paths.
 """
 
 SECRET_PATTERNS = (
-    re.compile(r&sk-[A-Za-z0-9_-]{8,}"),
+    re.compile(r"sk-[A-Za-z0-9_-]{8,}"),
     re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)[^\s,;]+"),
     re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,]+"),
 )
-_FENCE_RE = re.compile(r"^```([A-Za-z0-9_+.-]+)?\s*\n(.*?)\n````$", re.DOTALL)
+_FENCE_RE = re.compile(r"^```([A-Za-z0-9_+.-]+)?\s*\n(.*?)\n```$", re.DOTALL)
 
 
 class _Completions(Protocol):
