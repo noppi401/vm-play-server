@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
+import uuid
 import logging
 from http import HTTPStatus
 from typing import Any
@@ -22,6 +24,7 @@ from aivenv.tunnel.ngrok_manager import NgrokManager
 
 LOCALHOST = "127.0.0.1"
 PORT = 8080
+RUN_START_RESPONSE_TIMEOUT_SECONDS = 1.9
 
 logger = logging.getLogger(__name__)
 app = FastAPI(title="aivenv API")
@@ -110,6 +113,35 @@ def _session_url(session: Any) -> str | None:
     return str(url) if url is not None else None
 
 
+@app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
+async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execution_manager)) -> RunResponse | JSONResponse:
+    start_task = asyncio.create_task(_start_run(manager, request.instruction))
+    done, _ = await asyncio.wait({start_task}, timeout=RUN_START_RESPONSE_TIMEOUT_SECONDS)
+
+    if start_task in done:
+        try:
+            session = start_task.result()
+        except AivenvError as exc:
+            return _map_execution_error(exc)
+        except ValueError as exc:
+            return _error_response(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
+        except Exception:
+            logger.exception("failed to start execution")
+            return _error_response(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_server_error", "Failed to start execution.")
+
+        return RunResponse(
+            execution_id=_session_id(session),
+            result_url=_session_url(session),
+            status=ExecutionStatus.RUNNING,
+        )
+
+    _track_background_start(start_task)
+    current_session = getattr(manager, "current_session", None)
+    return RunResponse(
+        execution_id=_session_id(current_session) if current_session is not None else f"pending-{uuid.uuid4().hex}",
+        result_url=_session_url(current_session) if current_session is not None else None,
+        status=ExecutionStatus.RUNNING,
+    )
 @app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
 async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execution_manager)) -> RunResponse | JSONResponse:
     try:
