@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
-import uuid
 import logging
 from http import HTTPStatus
 from typing import Any
@@ -20,7 +18,6 @@ from aivenv.execution.container import ContainerManager
 from aivenv.execution.errors import AivenvError, ConfigError, ConflictError, NotFoundError
 from aivenv.execution.manager import ExecutionManager
 from aivenv.execution.models import ErrorResponse, ExecutionStatus, RunRequest, RunResponse, StopResponse
-from aivenv.tunnel.ngrok_manager import NgrokManager
 
 LOCALHOST = "127.0.0.1"
 PORT = 8080
@@ -104,32 +101,6 @@ def _session_id(session: Any) -> str:
         getattr(session, "execution_id", None)
         or getattr(session, "session_id", None)
         or getattr(session, "id", None)
-        or "default"
-    )
-
-
-def _session_url(session: Any) -> str | None:
-    url = getattr(session, "result_url", None) or getattr(session, "public_url", None)
-    return str(url) if url is not None else None
-
-
-@app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
-async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execution_manager)) -> RunResponse | JSONResponse:
-    start_task = asyncio.create_task(_start_run(manager, request.instruction))
-    done, _ = await asyncio.wait({start_task}, timeout=RUN_START_RESPONSE_TIMEOUT_SECONDS)
-
-    if start_task in done:
-        try:
-            session = start_task.result()
-        except AivenvError as exc:
-            return _map_execution_error(exc)
-        except ValueError as exc:
-            return _error_response(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
-        except Exception:
-            logger.exception("failed to start execution")
-            return _error_response(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_server_error", "Failed to start execution.")
-
-        return RunResponse(
             execution_id=_session_id(session),
             result_url=_session_url(session),
             status=ExecutionStatus.RUNNING,
