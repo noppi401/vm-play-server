@@ -54,6 +54,10 @@ def cli() -> None:
     """Manage the aivenv service."""
 
 
+
+def main() -> None:
+    """Console script entrypoint."""
+    cli()
 @cli.command()
 @click.option(
     "--openai-api-key",
