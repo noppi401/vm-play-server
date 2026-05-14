@@ -44,6 +44,7 @@ class ExecutionManager:
         work_dir: str | os.PathLike[str] | None = None,
         cleanup_on_stop: bool = True,
         log_buffer_factory: Any | None = None,
+        metadata_store: Any | None = None,
         logger: logging.Logger | None = None,
         **_: Any,
     ) -> None:
@@ -53,6 +54,7 @@ class ExecutionManager:
         self.work_dir = Path(work_dir) if work_dir is not None else None
         self.cleanup_on_stop = cleanup_on_stop
         self.log_buffer_factory = log_buffer_factory
+        self.metadata_store = metadata_store
         self.logger = logger or logging.getLogger(__name__)
         self._lock = asyncio.Lock()
         self._session: RunSession | None = None
@@ -74,6 +76,8 @@ class ExecutionManager:
             try:
                 code = await self._generate_code(prompt)
                 source_path.write_text(code, encoding="utf-8")
+                if self.metadata_store is not None:
+                    self.metadata_store(run_id, prompt, code)
 
                 container = await self._start_container(source_path, run_id)
                 try:

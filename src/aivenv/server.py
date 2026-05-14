@@ -20,7 +20,7 @@ from aivenv.execution.container import ContainerManager
 from aivenv.execution.errors import AivenvError, ConfigError
 from aivenv.execution.manager import ExecutionManager
 from aivenv.execution.models import ErrorResponse, ExecutionStatus, RunRequest, RunResponse, StopResponse
-from aivenv.log_server import PORT as LOG_PORT, get_log_buffer
+from aivenv.log_server import PORT as LOG_PORT, get_log_buffer, set_execution_metadata
 
 LOCALHOST = "127.0.0.1"
 PORT = 8080
@@ -72,6 +72,7 @@ def create_execution_manager(settings: Settings | None = None) -> ExecutionManag
         ngrok_manager=None,
         cleanup_on_stop=settings.cleanup_on_exit,
         log_buffer_factory=get_log_buffer,
+        metadata_store=set_execution_metadata,
     )
 
 
