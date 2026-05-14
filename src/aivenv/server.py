@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 import logging
 from http import HTTPStatus
 from typing import Any
-from uuid import uuid4
 
 import uvicorn
 from fastapi import Depends, FastAPI, Request
@@ -21,7 +19,6 @@ from aivenv.tunnel.ngrok_manager import NgrokManager
 from aivenv.execution.errors import AivenvError, ConfigError, ConflictError, NotFoundError
 from aivenv.execution.manager import ExecutionManager
 from aivenv.execution.models import ErrorResponse, ExecutionStatus, RunRequest, RunResponse, StopResponse
-
 LOCALHOST = "127.0.0.1"
 PORT = 8080
 RUN_START_RESPONSE_TIMEOUT_SECONDS = 1.9
@@ -86,15 +83,6 @@ def create_execution_manager(settings: Settings | None = None) -> ExecutionManag
     )
 
 
-def get_execution_manager() -> ExecutionManager:
-    global _manager
-    if _manager is None:
-        _manager = create_execution_manager()
-    return _manager
-
-
-async def _maybe_await(value: Any) -> Any:
-    if inspect.isawaitable(value):
         return await value
     return value
 
@@ -111,23 +99,7 @@ def _session_id(session: Any) -> str:
 def _session_url(session: Any) -> str | None:
     url = (
         getattr(session, "public_url", None)
-        or getattr(session, "result_url", None)
-        or getattr(session, "url", None)
-    )
-    return str(url) if url is not None else None
-
-
-def _log_background_start_error(task: asyncio.Task[Any]) -> None:
-    try:
-        task.result()
-    except asyncio.CancelledError:
-        pass
-    except Exception:  # noqa: BLE001
-        logger.exception("execution startup failed after accepted response")
-
-
-@app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
-async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execution_manager)) -> RunResponse | JSONResponse:
+        session = await _maybe_await(manager.start_run(request.instruction))
     try:
         start_task = asyncio.create_task(_maybe_await(manager.start_run(request.instruction)))
         session = await asyncio.wait_for(
@@ -146,7 +118,9 @@ async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execu
         return _map_execution_error(exc)
     except ValueError as exc:
         return _error_response(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
-    except Exception:  # noqa: BLE001
+
+@app.post("/stop", response_model=StopResponse, status_code=HTTPStatus.OK)
+async def stop(manager: ExecutionManager = Depends(get_execution_manager)) -> StopResponse | JSONResponse:
         logger.exception("failed to start execution")
         return _error_response(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_server_error", "Failed to start execution.")
 
@@ -154,7 +128,7 @@ async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execu
         execution_id=_session_id(session),
         result_url=_session_url(session),
         status=ExecutionStatus.RUNNING,
-    )
+    except Exception:  # noqa: BLE001
     current_session = getattr(manager, "current_session", None)
     execution_id = _session_id(current_session) if current_session is not None else None
 
