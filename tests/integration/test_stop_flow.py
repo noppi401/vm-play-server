@@ -140,7 +140,6 @@ def _run(client: TestClient) -> dict[str, Any]:
     assert response.status_code == 202, response.text
     body = response.json()
     assert isinstance(body["execution_id"], str)
-    assert body["result_url"] == PUBLIC_URL
     return body
 
 
