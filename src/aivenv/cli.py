@@ -52,15 +52,15 @@ class StartupError(click.ClickException):
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def cli() -> None:
-    """AI-driven virtual code execution environment."""
-
-
-@cli.command("start")
-@click.option(
-    "--openai-api-key",
-    envvar="OPENAI_API_KEY",
-    help="OpenAI API key. Can also be set with OPENAI_API_KEY.",
-)
+def start(
+    openai_api_key: str | None,
+    ngrok_authtoken: str | None,
+    port: int,
+    log_port: int,
+    model: str,
+    cleanup: bool,
+    log_level: str,
+) -> None:
 @click.option(
     "--ngrok-authtoken",
     envvar="NGROK_AUTHTOKEN",
@@ -81,16 +81,16 @@ def cli() -> None:
     ngrok_authtoken: str | None,
     port: int,
     log_port: int,
+def _build_start_config(
+    *,
+    openai_api_key: str | None,
+    ngrok_authtoken: str | None,
+    port: int,
+    log_port: int,
     model: str,
     cleanup: bool,
     log_level: str,
-J -> None:
-    """Start the API server, log server, Docker check, and lifecycle handlers."""
-
-    config = _build_start_config(
-        openai_api_key=openai_api_key,
-        ngrok_authtoken=ngrok_authtoken,
-        port=port,
+) -> StartConfig:
         log_port=log_port,
         model=model,
         cleanup=cleanup,
@@ -212,7 +212,6 @@ async def _run_start(config: StartConfig) -> None:
         click.echo(f"aivenv: starting API server at http://127.0.0.1:{config.port}")
         click.echo("aivenv: awaiting requests. Send POST /run to start an execution.")
         await api_server.serve()
-    finally:
         api_server.should_exit = True
         log_server.should_exit = True
         await graceful_shutdown()
@@ -237,7 +236,7 @@ def _create_log_app(config: StartConfig) -> Any:
         module_name="aivenv.log_server",
         factory_names=("create_log_app", "create_app", "app"),
         config=config,
-        label="log server",
+            previous(received_signal, frame)
     )
 
 
