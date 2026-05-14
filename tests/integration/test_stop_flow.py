@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -101,9 +102,9 @@ class Harness:
 def _import_attr(candidates: tuple[tuple[str, str], ...]) -> Any:
     for module_name, attr_name in candidates:
         try:
-            module = importlib.import_module(module_name)
-        except ModuleNotFoundError:
-            continue
+    sig = inspect.signature(target)
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        return target(**kwargs)
         if hasattr(module, attr_name):
             return getattr(module, attr_name)
     raise AssertionError("Could not locate aivenv app factory or execution manager")
