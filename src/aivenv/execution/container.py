@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import signal
 from collections.abc import Iterable
 from pathlib import Path
@@ -82,8 +83,9 @@ class ContainerManager:
         name: str | None = None,
         environment: dict[str, str] | None = None,
         run_id: str | None = None,
-    ) -> Any:
-        """Start a locked-down Docker container for the generated script."""
+        output = Path(output_dir).resolve()
+        output.mkdir(parents=True, exist_ok=True)
+        _ensure_output_dir_writable(output, self.UID)
 
         script = Path(script_path).resolve(strict=True)
         if not script.is_file():
@@ -160,6 +162,38 @@ class ContainerManager:
             self._container = None
 
     def cleanup_orphans(self) -> int:
+
+def _ensure_output_dir_writable(path: Path, uid_spec: str) -> None:
+    uid, gid = _parse_uid_spec(uid_spec)
+    if hasattr(os, "chown"):
+        try:
+            os.chown(path, uid, gid)
+        except PermissionError:
+            path.chmod(path.stat().st_mode | 0o777)
+        except OSError:
+            path.chmod(path.stat().st_mode | 0o777)
+    else:
+        path.chmod(path.stat().st_mode | 0o777)
+
+    if not _mode_allows_user_write(path, uid, gid):
+        raise ContainerManagerError(f"output directory is not writable by uid {uid_spec}: {path}")
+
+
+def _parse_uid_spec(uid_spec: str) -> tuple[int, int]:
+    uid_text, _, gid_text = uid_spec.partition(":")
+    uid = int(uid_text)
+    gid = int(gid_text or uid_text)
+    return uid, gid
+
+
+def _mode_allows_user_write(path: Path, uid: int, gid: int) -> bool:
+    stat_result = path.stat()
+    mode = stat_result.st_mode
+    if stat_result.st_uid == uid and mode & 0o200:
+        return True
+    if stat_result.st_gid == gid and mode & 0o020:
+        return True
+    return bool(mode & 0o002)
         """Remove containers previously created by this manager."""
 
         containers = self._client.containers.list(
