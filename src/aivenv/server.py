@@ -7,6 +7,7 @@ import inspect
 import logging
 from http import HTTPStatus
 from typing import Any
+from uuid import uuid4
 
 import uvicorn
 from fastapi import Depends, FastAPI, Request
@@ -107,7 +108,6 @@ def _session_id(session: Any) -> str:
         raise ValueError("Execution session did not provide an id.")
     return str(session_id)
 
-
 def _session_url(session: Any) -> str | None:
     url = (
         getattr(session, "public_url", None)
@@ -115,16 +115,38 @@ def _session_url(session: Any) -> str | None:
         or getattr(session, "url", None)
     )
     return str(url) if url is not None else None
-    return str(url) if url is not None else None
+
+
+def _log_background_start_error(task: asyncio.Task[Any]) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        pass
+    except Exception:  # noqa: BLE001
+        logger.exception("execution startup failed after accepted response")
+
+
 @app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
 async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execution_manager)) -> RunResponse | JSONResponse:
     try:
-        session = await _maybe_await(manager.start_run(request.instruction))
+        start_task = asyncio.create_task(_maybe_await(manager.start_run(request.instruction)))
+        session = await asyncio.wait_for(
+            asyncio.shield(start_task),
+            timeout=RUN_START_RESPONSE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        start_task.add_done_callback(_log_background_start_error)
+        current_session = getattr(manager, "current_session", None)
+        return RunResponse(
+            execution_id=_session_id(current_session) if current_session is not None else f"pending-{uuid4().hex}",
+            result_url=_session_url(current_session) if current_session is not None else None,
+            status=ExecutionStatus.RUNNING,
+        )
     except AivenvError as exc:
         return _map_execution_error(exc)
     except ValueError as exc:
         return _error_response(HTTPStatus.BAD_REQUEST, "bad_request", str(exc))
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         logger.exception("failed to start execution")
         return _error_response(HTTPStatus.INTERNAL_SERVER_ERROR, "internal_server_error", "Failed to start execution.")
 
@@ -133,10 +155,6 @@ async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execu
         result_url=_session_url(session),
         status=ExecutionStatus.RUNNING,
     )
-
-
-@app.post("/stop", response_model=StopResponse, status_code=HTTPStatus.OK)
-async def stop(manager: ExecutionManager = Depends(get_execution_manager)) -> StopResponse | JSONResponse:
     current_session = getattr(manager, "current_session", None)
     execution_id = _session_id(current_session) if current_session is not None else None
 
