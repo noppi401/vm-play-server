@@ -98,24 +98,22 @@ class Harness:
     ngrok: FakeNgrok
     temp_dir: Path
 
-
 def _import_attr(candidates: tuple[tuple[str, str], ...]) -> Any:
     for module_name, attr_name in candidates:
         try:
-    sig = inspect.signature(target)
-    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
-        return target(**kwargs)
+            module = importlib.import_module(module_name)
+        except ImportError:
+            continue
         if hasattr(module, attr_name):
             return getattr(module, attr_name)
     raise AssertionError("Could not locate aivenv app factory or execution manager")
 
-
 def _call(target: Callable[..., Any], **kwargs: Any) -> Any:
-    sig = imspect.signature(target)
+def _call(target: Callable[..., Any], **kwargs: Any) -> Any:
+    sig = inspect.signature(target)
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
-        return target(**kargs)
+        return target(**kwargs)
     return target(**{k: v for k, v in kwargs.items() if k in sig.parameters})
-
 
 def _harness(tmp_path: Path, *, cleanup: bool = False, hang: bool = False) -> Harness:
     manager_cls = _import_attr((
