@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from aivenv.config import Settings, load_settings
 from aivenv.execution.code_generator import CodeGenerator
 from aivenv.execution.container import ContainerManager
+from aivenv.tunnel.ngrok_manager import NgrokManager
 from aivenv.execution.errors import AivenvError, ConfigError, ConflictError, NotFoundError
 from aivenv.execution.manager import ExecutionManager
 from aivenv.execution.models import ErrorResponse, ExecutionStatus, RunRequest, RunResponse, StopResponse
@@ -97,22 +98,23 @@ async def _maybe_await(value: Any) -> Any:
 
 
 def _session_id(session: Any) -> str:
-    return str(
+    session_id = (
         getattr(session, "execution_id", None)
         or getattr(session, "session_id", None)
         or getattr(session, "id", None)
-            execution_id=_session_id(session),
-            result_url=_session_url(session),
-            status=ExecutionStatus.RUNNING,
-        )
-
-    _track_background_start(start_task)
-    current_session = getattr(manager, "current_session", None)
-    return RunResponse(
-        execution_id=_session_id(current_session) if current_session is not None else f"pending-{uuid.uuid4().hex}",
-        result_url=_session_url(current_session) if current_session is not None else None,
-        status=ExecutionStatus.RUNNING,
     )
+    if session_id is None:
+        raise ValueError("Execution session did not provide an id.")
+    return str(session_id)
+
+
+def _session_url(session: Any) -> str | None:
+    url = (
+        getattr(session, "result_url", None)
+        or getattr(session, "public_url", None)
+        or getattr(session, "url", None)
+    )
+    return str(url) if url is not None else None
 @app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
 async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execution_manager)) -> RunResponse | JSONResponse:
     try:
