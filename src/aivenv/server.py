@@ -97,14 +97,7 @@ async def _maybe_await(value: Any) -> Any:
         return await value
     return value
 
-
-def _session_url(session: Any) -> str | None:
-    url = (
-        getattr(session, "public_url", None)
-        or getattr(session, "result_url", None)
-        or getattr(session, "url", None)
-    )
-    return str(url) if url is not None else None
+def _session_id(session: Any) -> str:
     session_id = (
         getattr(session, "execution_id", None)
         or getattr(session, "session_id", None)
@@ -114,13 +107,14 @@ def _session_url(session: Any) -> str | None:
         raise ValueError("Execution session did not provide an id.")
     return str(session_id)
 
-    return str(url) if url is not None else None
 
-                    raise RuntimeError("Execution did not expose a session before startup completed.")
-        else:
-            session = start_result
-    except AivenvError as exc:
+def _session_url(session: Any) -> str | None:
+    url = (
+        getattr(session, "public_url", None)
+        or getattr(session, "result_url", None)
+        or getattr(session, "url", None)
     )
+    return str(url) if url is not None else None
     return str(url) if url is not None else None
 @app.post("/run", response_model=RunResponse, status_code=HTTPStatus.ACCEPTED)
 async def run(request: RunRequest, manager: ExecutionManager = Depends(get_execution_manager)) -> RunResponse | JSONResponse:
