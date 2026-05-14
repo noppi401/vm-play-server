@@ -3,31 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import signal
-from collections.abc import Iterable
+import threading
+from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 try:
     import docker
-except ModuleNotFoundError:  # pragma: no cover - exercised only when dependency is absent
+except ModuleNotFoundError:  # pragma: no cover
     docker = None  # type: ignore[assignment]
 
 try:
     from requests.exceptions import ReadTimeout
-except ModuleNotFoundError:  # pragma: no cover - requests is installed with docker-py
+except ModuleNotFoundError:  # pragma: no cover
     ReadTimeout = TimeoutError  # type: ignore[assignment]
 
 _END_OF_STREAM = object()
-
-
-class _LogBuffer(Protocol):
-    async def write(self, chunk: str) -> None:
-        ...
-
-    async def done(self) -> None:
-        ...
 
 
 class ContainerManagerError(RuntimeError):
@@ -76,22 +68,21 @@ class ContainerManager:
 
     def start(
         self,
-        *,
         script_path: str | Path,
-        output_dir: str | Path,
+        *,
+        output_dir: str | Path | None = None,
         command: Iterable[str] | None = None,
         name: str | None = None,
         environment: dict[str, str] | None = None,
         run_id: str | None = None,
-        output = Path(output_dir).resolve()
-        output.mkdir(parents=True, exist_ok=True)
-        _ensure_output_dir_writable(output, self.UID)
+    ) -> Any:
+        """Start a Docker container that runs the generated script."""
 
         script = Path(script_path).resolve(strict=True)
         if not script.is_file():
             raise ContainerManagerError(f"script path is not a file: {script}")
 
-        output = Path(output_dir).resolve()
+        output = Path(output_dir).resolve() if output_dir is not None else script.parent / "output"
         output.mkdir(parents=True, exist_ok=True)
 
         labels = dict(self.LABELS)
@@ -104,7 +95,6 @@ class ContainerManager:
             "detach": True,
             "stdout": True,
             "stderr": True,
-            "user": self.UID,
             "network_mode": "none",
             "working_dir": self.OUTPUT_PATH,
             "volumes": {
@@ -123,27 +113,54 @@ class ContainerManager:
         self._container = self._client.containers.run(**run_kwargs)
         return self._container
 
-    async def stream_logs(self, log_buffer: _LogBuffer, container: Any | None = None) -> None:
-        """Stream Docker stdout/stderr into a LogBuffer until the stream ends."""
+    async def start_container(self, script_path: str | Path, **kwargs: Any) -> Any:
+        """Async wrapper for start()."""
+
+        return await asyncio.to_thread(self.start, script_path, **kwargs)
+
+    async def stream_logs(self, container: Any | None = None) -> list[str]:
+        """Return container logs as decoded lines."""
 
         active_container = container or self._container
         if active_container is None:
             raise ContainerManagerError("no container is available for log streaming")
 
-        iterator = iter(active_container.logs(stream=True, follow=True, stdout=True, stderr=True))
-        try:
-            while True:
-                chunk = await asyncio.to_thread(_next_chunk, iterator)
-                if chunk is _END_OF_STREAM:
-                    break
-                await log_buffer.write(_decode_chunk(chunk))
-        finally:
-            await log_buffer.done()
+        raw_logs = await asyncio.to_thread(active_container.logs, stdout=True, stderr=True)
+        text = _decode_chunk(raw_logs)
+        return text.splitlines()
+
+    async def stream_logs_live(self, container: Any | None = None) -> AsyncIterator[str]:
+        """Yield log chunks from the container as they arrive."""
+        active_container = container or self._container
+        if active_container is None:
+            raise ContainerManagerError("no container is available for log streaming")
+
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+        def _reader() -> None:
+            try:
+                for chunk in active_container.logs(stream=True, follow=True, stdout=True, stderr=True):
+                    text = _decode_chunk(chunk)
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+            except Exception:
+                pass
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        threading.Thread(target=_reader, daemon=True).start()
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
 
     def stop(
         self,
-        *,
         container: Any | None = None,
+        *,
         timeout: float = 10,
         kill_timeout: float = 2,
     ) -> None:
@@ -161,39 +178,24 @@ class ContainerManager:
         if active_container is self._container:
             self._container = None
 
+    async def kill(self, container: Any | None = None) -> None:
+        """Kill a container immediately."""
+
+        active_container = container or self._container
+        if active_container is None:
+            return
+        await asyncio.to_thread(active_container.kill)
+        if active_container is self._container:
+            self._container = None
+
+    async def wait(self, container: Any | None = None) -> None:
+        """Wait for a container to stop."""
+
+        active_container = container or self._container
+        if active_container is not None:
+            await asyncio.to_thread(active_container.wait)
+
     def cleanup_orphans(self) -> int:
-
-def _ensure_output_dir_writable(path: Path, uid_spec: str) -> None:
-    uid, gid = _parse_uid_spec(uid_spec)
-    if hasattr(os, "chown"):
-        try:
-            os.chown(path, uid, gid)
-        except PermissionError:
-            path.chmod(path.stat().st_mode | 0o777)
-        except OSError:
-            path.chmod(path.stat().st_mode | 0o777)
-    else:
-        path.chmod(path.stat().st_mode | 0o777)
-
-    if not _mode_allows_user_write(path, uid, gid):
-        raise ContainerManagerError(f"output directory is not writable by uid {uid_spec}: {path}")
-
-
-def _parse_uid_spec(uid_spec: str) -> tuple[int, int]:
-    uid_text, _, gid_text = uid_spec.partition(":")
-    uid = int(uid_text)
-    gid = int(gid_text or uid_text)
-    return uid, gid
-
-
-def _mode_allows_user_write(path: Path, uid: int, gid: int) -> bool:
-    stat_result = path.stat()
-    mode = stat_result.st_mode
-    if stat_result.st_uid == uid and mode & 0o200:
-        return True
-    if stat_result.st_gid == gid and mode & 0o020:
-        return True
-    return bool(mode & 0o002)
         """Remove containers previously created by this manager."""
 
         containers = self._client.containers.list(
@@ -206,15 +208,6 @@ def _mode_allows_user_write(path: Path, uid: int, gid: int) -> bool:
             container.remove(force=True)
             removed += 1
         return removed
-
-
-def _next_chunk(iterator: Any) -> Any:
-    try:
-        return next(iterator)
-    except StopIteration:
-        return _END_OF_STREAM
-    except (TimeoutError, ReadTimeout):
-        return _END_OF_STREAM
 
 
 def _decode_chunk(chunk: Any) -> str:

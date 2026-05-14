@@ -14,6 +14,10 @@ from typing import Any, Awaitable, Callable, Iterable
 
 import click
 import uvicorn
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 
 DEFAULT_API_PORT = 8080
@@ -197,36 +201,6 @@ async def _run_start(config: StartConfig) -> None:
     os.environ["OPENAI_API_KEY"] = config.openai_api_key
     os.environ["NGROK_AUTHTOKEN"] = config.ngrok_authtoken
 
-def _start_ngrok_tunnel(log_port: int, authtoken: str) -> tuple[str, Callable[[], None]]:
-    """Start an ngrok tunnel for the log server and return its public URL."""
-
-    try:
-        ngrok_module = importlib.import_module("pyngrok.ngrok")
-    except ModuleNotFoundError as exc:
-        raise StartupError("Unable to start ngrok tunnel: pyngrok is not installed.") from exc
-
-    try:
-        set_auth_token = getattr(ngrok_module, "set_auth_token", None)
-        if callable(set_auth_token):
-            set_auth_token(authtoken)
-
-        tunnel = ngrok_module.connect(addr=log_port, proto="http")
-        public_url = getattr(tunnel, "public_url", None) or getattr(tunnel, "url", None)
-        if not public_url:
-            raise StartupError("Unable to start ngrok tunnel: ngrok did not return a public URL.")
-
-        def disconnect() -> None:
-            try:
-                ngrok_module.disconnect(public_url)
-            except Exception:
-                pass
-
-        return str(public_url), disconnect
-    except StartupError:
-        raise
-    except Exception as exc:
-        raise StartupError("Unable to start ngrok tunnel for the log server.") from exc
-
     log_app = _create_log_app(config)
     api_app = _create_api_app(config)
 
@@ -241,17 +215,6 @@ def _start_ngrok_tunnel(log_port: int, authtoken: str) -> tuple[str, Callable[[]
     try:
         await _wait_for_server_start(log_server, log_task, "log server")
         click.echo(f"aivenv: log server started at http://127.0.0.1:{config.log_port}")
-        click.echo("aivenv: ngrok tunnel will target the log server when execution starts.")
-        click.echo(f"aivenv: starting API server at http://127.0.0.1:{config.port}")
-        click.echo("aivenv: awaiting requests. Send POST /run to start an execution.")
-        await api_server.serve()
-    log_task = asyncio.create_task(log_server.serve(), name="aivenv-log-server")
-    ngrok_disconnect: Callable[[], None] | None = None
-    try:
-        await _wait_for_server_start(log_server, log_task, "log server")
-        click.echo(f"aivenv: log server started at http://127.0.0.1:{config.log_port}")
-        ngrok_url, ngrok_disconnect = _start_ngrok_tunnel(config.log_port, config.ngrok_authtoken)
-        click.echo(f"aivenv: ngrok log URL: {ngrok_url}")
         click.echo(f"aivenv: starting API server at http://127.0.0.1:{config.port}")
         click.echo("aivenv: awaiting requests. Send POST /run to start an execution.")
         await api_server.serve()
@@ -259,13 +222,13 @@ def _start_ngrok_tunnel(log_port: int, authtoken: str) -> tuple[str, Callable[[]
         api_server.should_exit = True
         log_server.should_exit = True
         await graceful_shutdown()
-        if ngrok_disconnect is not None:
-            ngrok_disconnect()
         await _await_background_task(log_task)
         _managed_servers.discard(api_server)
         _managed_servers.discard(log_server)
         if config.cleanup:
             click.echo("aivenv: cleanup complete.")
+
+
 
 def _create_log_app(config: StartConfig) -> Any:
     return _call_app_factory(
@@ -273,6 +236,15 @@ def _create_log_app(config: StartConfig) -> Any:
         factory_names=("create_log_app", "create_app", "app"),
         config=config,
         label="log server",
+    )
+
+
+def _create_api_app(config: StartConfig) -> Any:
+    return _call_app_factory(
+        module_name="aivenv.server",
+        factory_names=("create_app", "app"),
+        config=config,
+        label="API server",
     )
 
 
@@ -286,7 +258,7 @@ def _call_app_factory(*, module_name: str, factory_names: Iterable[str], config:
         candidate = getattr(module, factory_name, None)
         if candidate is None:
             continue
-        if factory_name == "app" and not callable(candidate):
+        if factory_name == "app":
             return candidate
         if callable(candidate):
             return _invoke_app_factory(candidate, config)

@@ -16,6 +16,8 @@ class Settings(BaseSettings):
         env_prefix="AIVENV_",
         case_sensitive=False,
         extra="ignore",
+        env_file=".env",
+        env_file_encoding="utf-8",
         populate_by_name=True,
         validate_by_name=True,
     )
@@ -25,6 +27,10 @@ class Settings(BaseSettings):
     )
     ngrok_authtoken: SecretStr = Field(
         validation_alias=AliasChoices("AIVENV_NGROK_AUTHTOKEN", "NGROK_AUTHTOKEN")
+    )
+    ngrok_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("AIVENV_NGROK_API_KEY", "NGROK_API_KEY"),
     )
     host: str = Field(default="127.0.0.1", validation_alias=AliasChoices("AIVENV_HOST"))
     port: int = Field(default=8080, validation_alias=AliasChoices("AIVENV_PORT", "PORT"))
@@ -88,6 +94,10 @@ class Settings(BaseSettings):
     @property
     def ngrok_authtoken_value(self) -> str:
         return self.ngrok_authtoken.get_secret_value()
+
+    @property
+    def ngrok_api_key_value(self) -> str | None:
+        return self.ngrok_api_key.get_secret_value() if self.ngrok_api_key else None
 
     @property
     def log_server_url(self) -> str:
