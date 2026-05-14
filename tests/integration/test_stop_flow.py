@@ -109,7 +109,6 @@ def _import_attr(candidates: tuple[tuple[str, str], ...]) -> Any:
     raise AssertionError("Could not locate aivenv app factory or execution manager")
 
 def _call(target: Callable[..., Any], **kwargs: Any) -> Any:
-def _call(target: Callable[..., Any], **kwargs: Any) -> Any:
     sig = inspect.signature(target)
     if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
         return target(**kwargs)
