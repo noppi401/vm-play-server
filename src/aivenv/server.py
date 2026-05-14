@@ -85,8 +85,8 @@ def create_execution_manager(settings: Settings | None = None) -> ExecutionManag
     )
     return ExecutionManager(
         code_generator,
-
-
+        container_manager,
+        ngrok_manager,
         cleanup_on_stop=settings.cleanup_on_exit,
     )
 def _session_url(session: Any) -> str | None:
@@ -113,6 +113,7 @@ def _session_id(session: Any) -> str:
         or getattr(session, "session_id", None)
         or getattr(session, "id", None)
     )
+    return str(session_id) if session_id is not None else f"unknown-{uuid4().hex}"
 def _log_background_start_error(task: asyncio.Task[Any]) -> None:
     try:
         task.result()
@@ -150,9 +151,6 @@ async def run(
 
     return RunResponse(
         execution_id=_session_id(session),
-        result_url=_session_url(session),
-        status=ExecutionStatus.RUNNING,
-    )
         result_url=_session_url(session),
         status=ExecutionStatus.RUNNING,
     )
